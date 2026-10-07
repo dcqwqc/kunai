@@ -23,11 +23,16 @@ import type { ProviderRegistry } from "../services/providers/ProviderRegistry";
 import { createProviderRegistry } from "../services/providers/ProviderRegistry";
 import type { PersistenceBootstrap } from "./bootstrap-persistence";
 import { applyYoutubeProviderConfig } from "./configure-youtube-provider";
+import {
+  loadExternalProviderModules,
+  type ExternalProviderLoadIssue,
+} from "./load-external-providers";
 
 export type ProviderBootstrap = {
   readonly engine: ProviderEngine;
   readonly providerRegistry: ProviderRegistry;
   readonly playbackResolveWork: PlaybackResolveWorkService;
+  readonly externalProviderIssues: readonly ExternalProviderLoadIssue[];
 };
 
 /**
@@ -104,9 +109,21 @@ export async function bootstrapProviders(
   const providerPriority = createProviderPrioritySnapshot(config);
   applyYoutubeProviderConfig(config.getRaw(), persistence.cacheDb);
 
-  const providerModules = providerModulesOverride
+  const builtInProviderModules = providerModulesOverride
     ? orderProviderModulesByPriority([...providerModulesOverride], providerPriority)
     : await loadProductionProviderModules(providerPriority);
+  const externalProviders = providerModulesOverride
+    ? {
+        modules: [] as readonly CoreProviderModule[],
+        issues: [] as readonly ExternalProviderLoadIssue[],
+      }
+    : await loadExternalProviderModules({
+        reservedProviderIds: new Set(builtInProviderModules.map((module) => module.providerId)),
+      });
+  const providerModules = orderProviderModulesByPriority(
+    [...builtInProviderModules, ...externalProviders.modules],
+    providerPriority,
+  );
   const relayRegistry = buildProviderRelayRegistry(providerModules);
   const createProviderFetchPort = (providerId: (typeof providerModules)[number]["providerId"]) =>
     createRelayFetchPort({
@@ -198,5 +215,6 @@ export async function bootstrapProviders(
     engine,
     providerRegistry,
     playbackResolveWork,
+    externalProviderIssues: externalProviders.issues,
   };
 }
