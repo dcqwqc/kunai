@@ -596,6 +596,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
       }),
     );
   }
+  if (argv[0] === "providers") {
+    const { runProviderPluginsCommand } = await import("./container/run-provider-plugins");
+    process.exit(await runProviderPluginsCommand({ json: argv.includes("--json") }));
+  }
   if (argv[0] === "rollback") {
     const { runRollback } = await import("./services/update/run-rollback");
     const toIdx = argv.indexOf("--to");

@@ -113,6 +113,8 @@ MAINTENANCE
   kunai rollback --dry-run     Show the planned rollback without changing state
   kunai doctor                 Read-only install health report (PATH, ownership)
   kunai doctor --json          Print the same report as JSON
+  kunai providers              List external provider plugins and load errors
+  kunai providers --json       Print provider-plugin status as JSON
   kunai uninstall              Remove kunai (add --purge to also delete user data)
   kunai diagnostics recent     Print recent redacted diagnostics from the local cache DB
                                (--format pretty|jsonl|markdown, --limit N, --no-color)
@@ -133,6 +135,7 @@ export const CLI_SUBCOMMANDS: readonly string[] = [
   "upgrade",
   "rollback",
   "doctor",
+  "providers",
   "uninstall",
   "diagnostics",
   "completion",
