@@ -770,6 +770,50 @@ describe("PersistentMpvSession fake IPC lifecycle harness", () => {
     expect(harness.commands).not.toContainEqual(["seek", 90, "absolute"]);
   });
 
+  test("explicit access denial skips same-url reconnect so source failover can run", async () => {
+    const harness = createHarness();
+    const events: unknown[] = [];
+    const session = await PersistentMpvSession.create({
+      stream: createStream({ url: "https://video.example/denied.m3u8" }),
+      options: {
+        displayTitle: "Episode 1",
+        primarySubtitle: null,
+        onPlaybackEvent: (event) => events.push(event),
+      },
+      kitsuneConfig: {
+        mpvInProcessStreamReconnect: true,
+        mpvInProcessStreamReconnectMaxAttempts: 2,
+        mpvKunaiScriptOpts: "",
+      } as never,
+      onControlReady: () => {},
+      runtime: harness.runtime,
+    });
+
+    harness.callbacks().onFileLoaded?.({ observedAt: 1 });
+    harness.callbacks().onPropertyUpdate({ name: "duration", value: 600, observedAt: 2 });
+    harness
+      .callbacks()
+      .onPropertyUpdate({ name: "demuxer-via-network", value: true, observedAt: 3 });
+    const playbackResult = session.waitForCurrentPlayback();
+    harness.callbacks().onEndFile({
+      reason: "error",
+      fileError: "kunai_access_denied",
+      observedAt: 4,
+    });
+
+    const result = await playbackResult;
+    expect(result.endReason).toBe("error");
+    expect(
+      events.filter((event) => (event as { type?: string }).type === "mpv-in-process-reconnect"),
+    ).toHaveLength(0);
+    expect(
+      harness.commands.filter(
+        (command) =>
+          command[0] === "loadfile" && command[1] === "https://video.example/denied.m3u8",
+      ),
+    ).toHaveLength(0);
+  });
+
   test("in-process reconnect reloads the stream and restores subtitles after file-loaded", async () => {
     const harness = createHarness();
     const events: unknown[] = [];

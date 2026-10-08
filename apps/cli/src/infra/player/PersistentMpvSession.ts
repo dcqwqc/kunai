@@ -1563,7 +1563,14 @@ export class PersistentMpvSession {
         ? result.duration
         : (active.stats.lastNonZeroSample?.durationSeconds ?? 0);
 
+    // The Showtime compatibility bridge uses this private file_error when the
+    // upstream explicitly rejected the resource (HTTP 403/access denied). That
+    // is a hard source failure: retrying the identical URL cannot repair it and
+    // only delays the normal source/provider failover path. Ordinary network
+    // errors still get the bounded same-URL reconnect below.
+    const hardSourceDenied = fileError === "kunai_access_denied";
     const shouldTryReconnect =
+      !hardSourceDenied &&
       this.mpvInProcessStreamReconnectEnabled &&
       this.mpvInProcessStreamReconnectMaxAttempts > 0 &&
       this.reconnectTryCount < this.mpvInProcessStreamReconnectMaxAttempts &&

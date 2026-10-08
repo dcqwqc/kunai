@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Install the local Kunai build without touching upstream release binaries.
+# Preserves the existing Ghostty/theme launcher and survives Kunai auto-updates.
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+launcher="$HOME/.local/libexec/kunai-themed"
+target="$HOME/.local/share/kunai/custom/kunai"
+backup="$HOME/.local/state/kunai-showtime-fix-backups/kunai-themed.pre-custom-bin"
+test -f "$launcher" || { echo "Missing Mirai themed launcher: $launcher" >&2; exit 1; }
+
+cd "$root"
+bun run --cwd apps/cli typecheck
+bun test apps/cli/test/unit/infra/player/persistent-mpv-session-harness.test.ts
+bun run --cwd apps/cli build:binary:host
+
+mkdir -p "$(dirname "$target")" "$(dirname "$backup")"
+install -m 755 "$root/apps/cli/dist/bin/kunai-linux-x64" "$target.new"
+mv -f "$target.new" "$target"
+if ! grep -Fq 'kunai/custom/kunai' "$launcher"; then
+  cp -n "$launcher" "$backup"
+  python3 - "$launcher" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+existing = 'real="$HOME/.local/share/kunai/versions/$active/kunai"'
+assert existing in source, "unexpected Kunai launcher layout: refusing to overwrite"
+source = source.replace(existing, 'real="$HOME/.local/share/kunai/custom/kunai"\n[[ -x "$real" ]] || real="$HOME/.local/share/kunai/versions/$active/kunai"', 1)
+path.write_text(source)
+PY
+fi
+"$HOME/.local/bin/kunai" --version
+echo "Installed Mirai Kunai build: $target"
