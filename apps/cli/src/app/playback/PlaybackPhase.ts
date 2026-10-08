@@ -78,9 +78,11 @@ import { resolvePlaybackProviderHandoff } from "@/app/playback/playback-provider
 import {
   promoteSoftFallbackAfterEngage,
   resolveStreamProviderId,
-  resolveTitleProviderPreference,
 } from "@/app/playback/playback-provider-switch";
-import { resolvePlaybackResolvePolicy } from "@/app/playback/playback-resolve-policy";
+import {
+  acceptResolvedProviderForPlayback,
+  resolvePlaybackResolvePolicy,
+} from "@/app/playback/playback-resolve-policy";
 import {
   createBootstrapResumeResolver,
   resumeSecondsFromHistoryForEpisode,
@@ -1729,10 +1731,6 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
                 selectedStreamId: currentPreferredStreamSelection.streamId,
               });
             }
-            const titlePreferredProviderId = resolveTitleProviderPreference(
-              config.getRaw(),
-              title.id,
-            );
             const resolveResult = await container.playbackResolveWork.resolve(
               {
                 title,
@@ -1891,37 +1889,27 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
             stream = resolveResult.stream;
             resolvedProviderId = resolveResult.providerId;
             observeResolveNetworkOutcome(container, resolveResult);
-            // The per-title preference guards the resolve only when the engine
-            // landed somewhere the user did NOT ask for. A session-scoped
-            // provider (⇧F fallback, per-session /provider) is itself the
-            // current intent — resolving exactly it must not be rejected just
-            // because an older durable preference still names another provider.
+            // A persisted title preference is a starting point, not a lock:
+            // accept successful automatic fallback, including just after the
+            // user explicitly selected a provider in guided recovery mode.
             if (
               stream &&
-              pendingUserProviderSwitch &&
-              titlePreferredProviderId &&
-              resolvedProviderId !== titlePreferredProviderId &&
-              resolvedProviderId !== stateManager.getState().provider
+              !acceptResolvedProviderForPlayback({
+                policy: resolvePolicy,
+                requestedProviderId: currentProvider.metadata.id,
+                resolvedProviderId,
+              })
             ) {
-              const preferredName =
-                providerRegistry.get(titlePreferredProviderId)?.metadata.name ??
-                titlePreferredProviderId;
-              const actualName =
-                providerRegistry.get(resolvedProviderId)?.metadata.name ?? resolvedProviderId;
               diagnosticsService.record({
                 ...playbackCorrelation,
                 category: "provider",
                 level: "warn",
-                message: "Rejected provider fallback because a per-title preference is set",
+                message: "Rejected alternative provider for provider-only resolve",
                 context: {
                   titleId: title.id,
-                  preferredProviderId: titlePreferredProviderId,
+                  requestedProviderId: currentProvider.metadata.id,
                   resolvedProviderId,
                 },
-              });
-              this.updatePlaybackFeedback(context, {
-                detail: `${preferredName} did not resolve for this episode`,
-                note: `Got ${actualName} instead. Use /recompute or switch provider.`,
               });
               stream = null;
             }
@@ -1971,7 +1959,8 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
               configuredProviderId: currentProvider.metadata.id,
               resolvedProviderId,
             });
-            if (hop.kind === "session-soft-hop") {
+            // A discarded resolve cannot advance the session's soft provider.
+            if (stream && hop.kind === "session-soft-hop") {
               logger.info("Resolved stream with fallback provider", {
                 from: currentProvider.metadata.id,
                 fallback: hop.providerId,

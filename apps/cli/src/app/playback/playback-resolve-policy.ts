@@ -49,3 +49,18 @@ export function resolvePlaybackResolvePolicy(input: {
     recoveryMode: honorExplicitProviderOnly ? "manual" : input.configuredRecoveryMode,
   };
 }
+
+
+/**
+ * A saved title provider is a preferred starting point, not a hard lock.
+ * Guided/fallback-first resolution may hand a working alternative to the
+ * player. Only explicitly provider-only requests may reject an alternative.
+ */
+export function acceptResolvedProviderForPlayback(input: {
+  readonly policy: Pick<PlaybackResolvePolicy, "honorExplicitProviderOnly">;
+  readonly requestedProviderId: string;
+  readonly resolvedProviderId: string;
+}): boolean {
+  return !input.policy.honorExplicitProviderOnly ||
+    input.requestedProviderId === input.resolvedProviderId;
+}
