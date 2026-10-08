@@ -73,6 +73,36 @@ describe("TracksPanelShell two-pane", () => {
     expect(frame).toContain("Neon");
   });
 
+  test("single source explains how to reach other sections", () => {
+    const singleSource: TrackCapabilityGroup[] = [
+      {
+        section: "source",
+        title: "Source",
+        selectable: false,
+        rows: [
+          {
+            section: "source",
+            label: "VidRock",
+            value: "vidrock",
+            selected: true,
+            enabled: false,
+            risk: "normal",
+          },
+        ],
+      },
+    ];
+    const frame = captureFrame(
+      <TracksPanelShell
+        groups={singleSource}
+        width={90}
+        nav={createInitialTracksNav({ focusedPane: "options" })}
+      />,
+      { columns: 90 },
+    );
+    expect(frame).toContain("Only one choice here");
+    expect(frame).toContain("↑↓ switch sections");
+  });
+
   test("empty groups renders a graceful message", () => {
     const frame = captureFrame(<TracksPanelShell groups={[]} width={80} />, { columns: 80 });
     expect(frame).toContain("No stream details");

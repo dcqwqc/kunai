@@ -76,3 +76,43 @@ describe("tracks-panel left/right input bridge", () => {
     handle.unmount();
   });
 });
+
+/** Actual Ink escape-sequence delivery for the one-source -> provider flow. */
+function SingleSourceSurface({ onNav }: { onNav: (state: TracksNavState) => void }) {
+  const [nav, dispatchNav] = useReducer(
+    (state: TracksNavState, event: Parameters<typeof tracksPanelNavReducer>[1]) => {
+      const optionCount = state.sectionIndex === 0 ? 5 : state.sectionIndex === 1 ? 1 : 3;
+      return tracksPanelNavReducer(state, event, { sectionCount: 3, optionCount });
+    },
+    { focusedPane: "options" as const, sectionIndex: 1, optionIndex: 0 },
+  );
+  useInput((input, key) => {
+    if (key.upArrow || key.downArrow || input === "j" || input === "k") {
+      dispatchNav({ type: key.downArrow || input === "j" ? "down" : "up" });
+    }
+  });
+  React.useEffect(() => onNav(nav), [nav, onNav]);
+  return (
+    <Text>
+      {nav.sectionIndex}/{nav.optionIndex}
+    </Text>
+  );
+}
+
+describe("single-source arrows through Ink input delivery", () => {
+  test("Up exits the one-item source, Down moves onto a different provider", () => {
+    const history: TracksNavState[] = [];
+    const onNav = (nav: TracksNavState) => {
+      history.push(nav);
+    };
+    const handle = render(<SingleSourceSurface onNav={onNav} />, { columns: 100 });
+    handle.stdin.enqueue("[A"); // Up: Source -> Provider
+    handle.stdin.enqueue("[B"); // Down: select next provider, not Source again
+    expect(history.at(-1)).toEqual({
+      focusedPane: "options",
+      sectionIndex: 0,
+      optionIndex: 1,
+    });
+    handle.unmount();
+  });
+});

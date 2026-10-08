@@ -101,3 +101,34 @@ describe("subtitle grid navigation", () => {
     expect(tracksPanelNavReducer(inOptions(5), { type: "right" }, list).optionIndex).toBe(5);
   });
 });
+
+describe("single-source recovery navigation", () => {
+  test("up from the sole source opens the provider section without losing option focus", () => {
+    const initial: TracksNavState = { focusedPane: "options", sectionIndex: 1, optionIndex: 0 };
+    const providers = tracksPanelNavReducer(initial, { type: "up" }, ctx(5, 1));
+    expect(providers).toEqual({ focusedPane: "options", sectionIndex: 0, optionIndex: 0 });
+    // Once in the provider section, up/down must select provider rows normally.
+    expect(tracksPanelNavReducer(providers, { type: "down" }, ctx(5, 5))).toEqual({
+      focusedPane: "options",
+      sectionIndex: 0,
+      optionIndex: 1,
+    });
+  });
+
+  test("down from sole source opens quality, then navigates quality variants", () => {
+    const source: TracksNavState = { focusedPane: "options", sectionIndex: 1, optionIndex: 0 };
+    const quality = tracksPanelNavReducer(source, { type: "down" }, ctx(5, 1));
+    expect(quality).toEqual({ focusedPane: "options", sectionIndex: 2, optionIndex: 0 });
+    expect(tracksPanelNavReducer(quality, { type: "down" }, ctx(5, 3)).optionIndex).toBe(1);
+  });
+
+  test("empty option panes and section boundaries never trap the cursor", () => {
+    const empty: TracksNavState = { focusedPane: "options", sectionIndex: 2, optionIndex: 0 };
+    expect(tracksPanelNavReducer(empty, { type: "up" }, ctx(5, 0)).sectionIndex).toBe(1);
+    expect(tracksPanelNavReducer(empty, { type: "down" }, ctx(5, 0)).sectionIndex).toBe(3);
+    const top: TracksNavState = { focusedPane: "options", sectionIndex: 0, optionIndex: 0 };
+    expect(tracksPanelNavReducer(top, { type: "up" }, ctx(5, 1)).sectionIndex).toBe(0);
+    const bottom: TracksNavState = { focusedPane: "options", sectionIndex: 4, optionIndex: 0 };
+    expect(tracksPanelNavReducer(bottom, { type: "down" }, ctx(5, 1)).sectionIndex).toBe(4);
+  });
+});

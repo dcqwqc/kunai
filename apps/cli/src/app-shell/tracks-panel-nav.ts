@@ -54,6 +54,26 @@ export function tracksPanelNavReducer(
 ): TracksNavState {
   const columns = Math.max(1, Math.floor(ctx.gridColumns ?? 1));
 
+  // When the focused pane has no alternative row, vertical keys previously
+  // clamped to zero forever. In particular the common single-source case
+  // looked like dead arrow keys, hiding the provider alternatives one section
+  // above. Keep the pane focused while moving between sections so a user can
+  // press Up (Source -> Provider), then Down to choose a different provider.
+  if (
+    state.focusedPane === "options" &&
+    ctx.optionCount <= 1 &&
+    (event.type === "up" || event.type === "down")
+  ) {
+    return {
+      ...state,
+      sectionIndex: clamp(
+        state.sectionIndex + (event.type === "down" ? 1 : -1),
+        ctx.sectionCount - 1,
+      ),
+      optionIndex: 0,
+    };
+  }
+
   switch (event.type) {
     case "down":
       return state.focusedPane === "sections"

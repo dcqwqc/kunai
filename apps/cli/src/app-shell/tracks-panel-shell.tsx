@@ -369,6 +369,11 @@ function OptionsPane({
         );
       })}
       {hiddenBelow > 0 ? <Text color={palette.dim}>{`↓ ${hiddenBelow} more`}</Text> : null}
+      {optionsFocused && rows.length === 1 ? (
+        <Text color={palette.dim}>
+          {truncateLine("↳ Only one choice here · ↑↓ switch sections", width)}
+        </Text>
+      ) : null}
     </Box>
   );
 }
