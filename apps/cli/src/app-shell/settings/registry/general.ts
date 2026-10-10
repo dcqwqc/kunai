@@ -50,7 +50,7 @@ const DEFAULT_MODE_OPTIONS = [
 export function generalSettingsRows(ctx: SettingsRegistryContext): SettingRowDef[] {
   // Read once per page build, not per row render — the gate below closes over
   // the answer so opening Settings costs a single `existsSync`.
-  const snapshotExists = preSetupSnapshotExists();
+  const snapshotExists = ctx.preSetupSnapshotExists?.() ?? preSetupSnapshotExists();
   return [
     {
       kind: "section",

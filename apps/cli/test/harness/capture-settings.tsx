@@ -46,6 +46,8 @@ export const registryCtx = {
     },
   },
   container: {} as Container,
+  // Golden captures must not depend on the developer's real pre-setup backup.
+  preSetupSnapshotExists: () => false,
 };
 
 export const page = buildSettingsPage(registryCtx);

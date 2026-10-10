@@ -31,6 +31,8 @@ export type SettingsRegistryContext = {
     readonly status: SyncStatus;
   };
   readonly container: Container;
+  /** Deterministic fixture injection; production checks the real local snapshot. */
+  readonly preSetupSnapshotExists?: () => boolean;
 };
 
 export type EnumOption = {
