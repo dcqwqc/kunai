@@ -946,8 +946,12 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
             kind: historyTitleLookup.kind,
             externalIds: historyTitleLookup.externalIds,
           }) ?? null;
+        const { movieShareStartSelection } =
+          await import("@/app/playback/movie-share-start-selection");
         const { chooseMovieStartingPoint } = await import("@/session-flow");
-        const selection = await chooseMovieStartingPoint({ history: movieHistory, container });
+        const selection =
+          movieShareStartSelection(bootstrapStartSeconds) ??
+          (await chooseMovieStartingPoint({ history: movieHistory, container }));
         if (!selection) {
           logger.info("Movie starting point cancelled before playback", { titleId: title.id });
           return {
@@ -957,11 +961,6 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
         }
         episode = { season: 1, episode: 1 };
         run.pendingStart = startFromEpisodeSelection(selection);
-        if (bootstrapStartSeconds !== undefined && bootstrapStartSeconds > 0) {
-          run.pendingStart = startAtResumePoint(bootstrapStartSeconds, {
-            suppressResumePrompt: true,
-          });
-        }
       }
 
       stateManager.dispatch({ type: "SELECT_EPISODE", episode });
