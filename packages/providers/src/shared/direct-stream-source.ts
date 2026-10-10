@@ -76,6 +76,8 @@ export interface DirectStreamSourceOptions {
   readonly fetchPayload: (params: DirectStreamFetchParams) => Promise<DirectStreamPayload | null>;
   /** When true, probe the selected stream before returning (resolve-gate). */
   readonly resolveGateProbe?: boolean;
+  /** Give each named server lane its own source so startup failover can switch. */
+  readonly splitSourcesByServer?: boolean;
   readonly resolveGateTimeoutMs?: number;
 }
 
@@ -162,9 +164,22 @@ export async function resolveDirectStreamSource(
     });
 
     const streams = payload
-      ? normalizeStreams(payload, providerId, sourceId, label, cachePolicy)
+      ? normalizeStreams(
+          payload,
+          providerId,
+          sourceId,
+          label,
+          cachePolicy,
+          options.splitSourcesByServer,
+        )
       : [];
-    let selectedStream = streams[0];
+    const preferredStream =
+      streams.find((stream) => stream.id === input.preferredStreamId) ??
+      streams.find((stream) => stream.sourceId === input.preferredSourceId);
+    const orderedStreams = preferredStream
+      ? [preferredStream, ...streams.filter((stream) => stream.id !== preferredStream.id)]
+      : streams;
+    let selectedStream = orderedStreams[0];
     if (!selectedStream) {
       const failure: ProviderFailure = {
         providerId,
@@ -188,7 +203,7 @@ export async function resolveDirectStreamSource(
 
       let cancelled = false;
 
-      for (const candidate of streams.slice(0, RESOLVE_GATE_MAX_PROBES)) {
+      for (const candidate of orderedStreams.slice(0, RESOLVE_GATE_MAX_PROBES)) {
         // A cancelled resolve must not keep spending probes, and must not be
         // recorded as a stream failure — the caller went away, the CDN is fine.
         if (context.signal?.aborted) {
@@ -278,7 +293,7 @@ export async function resolveDirectStreamSource(
     emitTraceEvent(events, context, {
       type: "source:success",
       providerId,
-      sourceId,
+      sourceId: selectedStream.sourceId ?? sourceId,
       streamId: selectedStream.id,
       message: `${label} selected ${selectedStream.qualityLabel ?? "auto"} stream`,
       attributes: { streams: streams.length },
@@ -293,7 +308,7 @@ export async function resolveDirectStreamSource(
     const variants = streams.map<ProviderVariantCandidate>((stream) => ({
       id: stream.variantId ?? stream.id,
       providerId,
-      sourceId,
+      sourceId: stream.sourceId ?? sourceId,
       label: stream.qualityLabel ?? stream.container ?? "auto",
       qualityLabel: stream.qualityLabel,
       qualityRank: stream.qualityRank,
@@ -311,7 +326,7 @@ export async function resolveDirectStreamSource(
     emitTraceEvent(events, context, {
       type: "provider:success",
       providerId,
-      sourceId,
+      sourceId: selectedStream.sourceId ?? sourceId,
       streamId: selectedStream.id,
       message: `${label} resolved ${streams.length} stream(s) and ${subtitles.length} subtitle(s)`,
     });
@@ -322,19 +337,20 @@ export async function resolveDirectStreamSource(
       providerId,
       selectedStreamId: selectedStream.id,
       streamReachabilityVerified,
-      sources: [
-        {
-          id: sourceId,
-          providerId,
-          kind: "provider-api",
-          label,
-          host,
-          status: "selected",
-          confidence: 0.9,
-          requiresRuntime: "direct-http",
-          cachePolicy,
-        },
-      ],
+      sources: [...new Set(streams.map((stream) => stream.sourceId ?? sourceId))].map((laneId) => ({
+        id: laneId,
+        providerId,
+        kind: "provider-api" as const,
+        label: streams.find((stream) => stream.sourceId === laneId)?.serverName ?? label,
+        host,
+        status:
+          laneId === (selectedStream.sourceId ?? sourceId)
+            ? ("selected" as const)
+            : ("available" as const),
+        confidence: 0.9,
+        requiresRuntime: "direct-http" as const,
+        cachePolicy,
+      })),
       streams,
       variants,
       subtitles,
@@ -404,6 +420,7 @@ function normalizeStreams(
   sourceId: string,
   label: string,
   cachePolicy: CachePolicy,
+  splitSourcesByServer = false,
 ): StreamCandidate[] {
   const streams: StreamCandidate[] = [];
   const seen = new Set<string>();
@@ -415,11 +432,17 @@ function normalizeStreams(
     const protocol = inferProtocol(entry.url);
     const qualityLabel = normalizeQualityLabel(entry.qualityHint);
     const qualityRank = qualityRankFromLabel(entry.qualityHint) ?? 0;
+    const laneKey = entry.serverLabel
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-");
+    const laneSourceId =
+      splitSourcesByServer && laneKey ? `source:${providerId}:${laneKey}` : sourceId;
     streams.push({
       id: createStreamId(providerId, [entry.url]),
       providerId,
-      sourceId,
-      variantId: createVariantId(providerId, [sourceId, qualityLabel, entry.url]),
+      sourceId: laneSourceId,
+      variantId: createVariantId(providerId, [laneSourceId, qualityLabel, entry.url]),
       url: entry.url,
       protocol,
       container: containerForProtocol(protocol),

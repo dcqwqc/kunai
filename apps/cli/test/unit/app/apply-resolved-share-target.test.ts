@@ -39,7 +39,11 @@ function createApplyContainer(
         if (event.type === "SET_MODE" && event.provider) providers.push(event.provider);
       },
     },
-    config: { animeProvider: overrides.animeProvider ?? "allanime" },
+    config: {
+      animeProvider: overrides.animeProvider ?? "allanime",
+      provider: "videasy",
+      youtubeProvider: "youtube",
+    },
     providerRegistry: {
       get: (id: string) =>
         available.has(id)
@@ -87,6 +91,16 @@ describe("applyShareRefLaunch", () => {
 });
 
 describe("applyResolvedShareSideEffects", () => {
+  it("routes a movie share to series mode even after anime was selected", () => {
+    const { container, modes } = createApplyContainer();
+    applyResolvedShareSideEffects(
+      container,
+      { title: { id: "tmdb:612654", type: "movie", name: "Fantastic Fungi" }, mode: "series" },
+      { anchor: { by: "catalog", ns: "tmdb", id: "612654" }, kind: "movie" },
+    );
+    expect(modes).toContain("series");
+  });
+
   it("switches to anime mode and applies a valid anime provider hint", () => {
     const { container, modes } = createApplyContainer({
       availableProviders: ["videasy", "allanime"],

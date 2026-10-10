@@ -36,6 +36,32 @@ const THREE_STREAMS = {
 };
 
 describe("direct stream resolve gate", () => {
+  test("named server lanes form distinct failover sources when opted in", async () => {
+    const result = await resolveDirectStreamSource({
+      providerId: "vidrock",
+      host: "vidrock.net",
+      label: "VidRock",
+      input: createInput(),
+      context: createContext(async () => new Response("ok")),
+      splitSourcesByServer: true,
+      fetchPayload: async () => ({
+        streams: [
+          { url: "https://cdn.example/one.m3u8", serverLabel: "Nova" },
+          { url: "https://cdn.example/two.m3u8", serverLabel: "Luna" },
+          { url: "https://cdn.example/three.m3u8", serverLabel: "Orion" },
+        ],
+      }),
+    });
+    expect(result.status).toBe("resolved");
+    expect(result.sources?.map((s) => s.id)).toEqual([
+      "source:vidrock:nova",
+      "source:vidrock:luna",
+      "source:vidrock:orion",
+    ]);
+    expect(result.streams.map((s) => s.sourceId)).toEqual(result.sources?.map((s) => s.id));
+    expect(result.sources?.filter((s) => s.status === "selected")).toHaveLength(1);
+  });
+
   test("falls back to a lower-ranked stream when the top candidate is unreachable", async () => {
     const probed: string[] = [];
     const result = await resolveDirectStreamSource({
@@ -56,6 +82,34 @@ describe("direct stream resolve gate", () => {
     expect(result.streams?.[0]).toBeDefined();
     // The 720p sibling is alive, so the provider must not be condemned.
     expect(result.selectedStreamId).toBeTruthy();
+  });
+
+  test("respects a preferred named server lane during recovery and probes it first", async () => {
+    const probed: string[] = [];
+    const result = await resolveDirectStreamSource({
+      providerId: "vidrock",
+      host: "vidrock.net",
+      label: "VidRock",
+      input: createInput({ preferredSourceId: "source:vidrock:atlas" }),
+      context: createContext(async (url) => {
+        probed.push(url);
+        return new Response("ok");
+      }),
+      splitSourcesByServer: true,
+      resolveGateProbe: true,
+      fetchPayload: async () => ({
+        streams: [
+          { url: "https://cdn.example/nova.mp4", serverLabel: "Nova" },
+          { url: "https://cdn.example/atlas.mp4", serverLabel: "Atlas" },
+          { url: "https://cdn.example/luna.mp4", serverLabel: "Luna" },
+        ],
+      }),
+    });
+    expect(result.status).toBe("resolved");
+    expect(probed[0]).toContain("/atlas.mp4");
+    expect(result.streams.find((stream) => stream.id === result.selectedStreamId)?.sourceId).toBe(
+      "source:vidrock:atlas",
+    );
   });
 
   test("a rate-limited CDN blocks, because its streams do not play either", async () => {

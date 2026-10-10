@@ -36,13 +36,19 @@ export function applyResolvedShareSideEffects(
   if (resolved.startSeconds !== undefined) {
     setShareBootstrapStartSeconds(resolved.startSeconds);
   }
-  if (resolved.mode === "anime") {
-    container.stateManager.dispatch({
-      type: "SET_MODE",
-      mode: "anime",
-      provider: container.config.animeProvider,
-    });
-  }
+  // A share handoff chooses its own catalog lane, even when the saved default
+  // (or a previous session) is anime. Otherwise a TMDB movie can be resolved
+  // by anime providers and fail before the first frame.
+  container.stateManager.dispatch({
+    type: "SET_MODE",
+    mode: resolved.mode,
+    provider:
+      resolved.mode === "anime"
+        ? container.config.animeProvider
+        : resolved.mode === "youtube"
+          ? container.config.youtubeProvider
+          : container.config.provider,
+  });
   const hintedProviderId = ref.hint?.providerId?.trim();
   if (hintedProviderId && !resolved.note?.includes("isn't available")) {
     const normalized = resolveProviderIdAlias(hintedProviderId);
