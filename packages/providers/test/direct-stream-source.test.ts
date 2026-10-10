@@ -58,7 +58,7 @@ describe("direct stream resolve gate", () => {
       "source:vidrock:luna",
       "source:vidrock:orion",
     ]);
-    expect(result.streams.map((s) => s.sourceId)).toEqual(result.sources?.map((s) => s.id));
+    expect(result.streams.map((s) => s.sourceId)).toEqual(result.sources?.map((s) => s.id) ?? []);
     expect(result.sources?.filter((s) => s.status === "selected")).toHaveLength(1);
   });
 
