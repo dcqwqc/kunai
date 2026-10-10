@@ -50,7 +50,6 @@ export function resolvePlaybackResolvePolicy(input: {
   };
 }
 
-
 /**
  * A saved title provider is a preferred starting point, not a hard lock.
  * Guided/fallback-first resolution may hand a working alternative to the
@@ -61,6 +60,8 @@ export function acceptResolvedProviderForPlayback(input: {
   readonly requestedProviderId: string;
   readonly resolvedProviderId: string;
 }): boolean {
-  return !input.policy.honorExplicitProviderOnly ||
-    input.requestedProviderId === input.resolvedProviderId;
+  return (
+    !input.policy.honorExplicitProviderOnly ||
+    input.requestedProviderId === input.resolvedProviderId
+  );
 }

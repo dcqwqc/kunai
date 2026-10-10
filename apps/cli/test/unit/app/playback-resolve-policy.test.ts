@@ -83,7 +83,6 @@ describe("resolvePlaybackResolvePolicy", () => {
   });
 });
 
-
 describe("provider fallback preference contract", () => {
   test("a saved provider preference never overrides a successful guided fallback", () => {
     const policy = resolvePlaybackResolvePolicy({
@@ -92,11 +91,13 @@ describe("provider fallback preference contract", () => {
       sourceRefreshDecision: null,
       configuredRecoveryMode: "guided",
     });
-    expect(acceptResolvedProviderForPlayback({
-      policy,
-      requestedProviderId: "vidlink",
-      resolvedProviderId: "vidrock",
-    })).toBe(true);
+    expect(
+      acceptResolvedProviderForPlayback({
+        policy,
+        requestedProviderId: "vidlink",
+        resolvedProviderId: "vidrock",
+      }),
+    ).toBe(true);
   });
 
   test("fallback-first is automatic, while manual and recompute remain provider-only", () => {
@@ -107,11 +108,13 @@ describe("provider fallback preference contract", () => {
         sourceRefreshDecision: null,
         configuredRecoveryMode: mode,
       });
-      expect(acceptResolvedProviderForPlayback({
-        policy,
-        requestedProviderId: "vidlink",
-        resolvedProviderId: "vidrock",
-      })).toBe(mode === "fallback-first");
+      expect(
+        acceptResolvedProviderForPlayback({
+          policy,
+          requestedProviderId: "vidlink",
+          resolvedProviderId: "vidrock",
+        }),
+      ).toBe(mode === "fallback-first");
     }
     const recompute = resolvePlaybackResolvePolicy({
       recomputeSources: true,
@@ -119,15 +122,19 @@ describe("provider fallback preference contract", () => {
       sourceRefreshDecision: null,
       configuredRecoveryMode: "guided",
     });
-    expect(acceptResolvedProviderForPlayback({
-      policy: recompute,
-      requestedProviderId: "vidlink",
-      resolvedProviderId: "vidrock",
-    })).toBe(false);
-    expect(acceptResolvedProviderForPlayback({
-      policy: recompute,
-      requestedProviderId: "vidlink",
-      resolvedProviderId: "vidlink",
-    })).toBe(true);
+    expect(
+      acceptResolvedProviderForPlayback({
+        policy: recompute,
+        requestedProviderId: "vidlink",
+        resolvedProviderId: "vidrock",
+      }),
+    ).toBe(false);
+    expect(
+      acceptResolvedProviderForPlayback({
+        policy: recompute,
+        requestedProviderId: "vidlink",
+        resolvedProviderId: "vidlink",
+      }),
+    ).toBe(true);
   });
 });
