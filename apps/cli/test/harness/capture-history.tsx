@@ -44,7 +44,8 @@ const view = buildHistoryView({
   selectedIndex: 0,
   maxVisible: 12,
   narrow: false,
-  context: {},
+  // Relative labels must not drift as the calendar advances.
+  context: { nowMs: Date.parse("2026-10-01T12:00:00.000Z") },
 });
 
 export function historyContinueNode() {

@@ -413,8 +413,7 @@ export function buildHistoryPanelLines(
   return lines;
 }
 
-function relativeTime(date: Date): string {
-  const now = Date.now();
+function relativeTime(date: Date, now = Date.now()): string {
   const diff = now - date.getTime();
   const minutes = Math.floor(diff / 60_000);
   if (minutes < 1) return "just now";
@@ -437,6 +436,8 @@ export type HistoryPickerOptionsContext = {
   // ContinueHistoryRelease — so the `caught-up` signal survives for bucketing.
   readonly releaseSignals?: ReadonlyMap<string, HistoryReleaseSignal>;
   readonly catalogBounds?: ReadonlyMap<string, CatalogEpisodeBounds>;
+  /** Optional snapshot clock for deterministic history view captures. */
+  readonly nowMs?: number;
 };
 
 /**
@@ -537,7 +538,7 @@ function buildHistoryOptionRow(
     return {
       value: id,
       label: `${displayEntry.title}  ·  ${formatSeriesEpisode(projection.season, projection.episode)}`,
-      detail: `${directLocalPlay ? "enter plays downloaded episode" : "download ready in /library"}  ·  ${projection.badge ?? "next episode ready"}  ·  completed ${episode}  ·  ${relativeTime(new Date(displayEntry.updatedAt))}`,
+      detail: `${directLocalPlay ? "enter plays downloaded episode" : "download ready in /library"}  ·  ${projection.badge ?? "next episode ready"}  ·  completed ${episode}  ·  ${relativeTime(new Date(displayEntry.updatedAt), context.nowMs)}`,
       badge: projection.badge ?? "offline",
       tone: "success",
       posterTitle: displayEntry.title,
@@ -561,7 +562,7 @@ function buildHistoryOptionRow(
       historyContentType(displayEntry) === "series"
         ? formatSeriesEpisode(entrySeason, entryEpisode)
         : "movie";
-    const timeAgo = relativeTime(new Date(displayEntry.updatedAt));
+    const timeAgo = relativeTime(new Date(displayEntry.updatedAt), context.nowMs);
     const returnLoopDetail = describeHistoryReturnLoopDetail({
       entry,
       nextRelease: context.nextReleases?.get(id) ?? null,
@@ -580,7 +581,7 @@ function buildHistoryOptionRow(
     : displayEntry.positionSeconds > 10
       ? `⏸ ${formatTimestamp(displayEntry.positionSeconds)}`
       : "▶ start";
-  const timeAgo = relativeTime(new Date(displayEntry.updatedAt));
+  const timeAgo = relativeTime(new Date(displayEntry.updatedAt), context.nowMs);
 
   return {
     value: id,
