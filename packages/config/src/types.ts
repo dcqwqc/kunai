@@ -113,6 +113,8 @@ export interface KitsuneConfig {
   autoCleanupWatched: boolean;
   recoveryMode: RecoveryMode;
   startupPriority: StartupPriority;
+  automaticStreamFailover: boolean;
+  prepareBackupStream: boolean;
   offlineArtworkCacheEnabled: boolean;
   offlineFreeSpaceReserveBytes: number;
   offlineUnknownEpisodeEstimateBytes: number;

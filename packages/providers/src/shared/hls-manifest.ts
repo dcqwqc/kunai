@@ -84,16 +84,27 @@ export function parseFirstHlsMediaSegmentPath(manifestText: string): string | nu
 }
 
 export function absolutizeHostRootHlsManifest(manifestText: string, manifestUrl: string): string {
-  const origin = new URL(manifestUrl).origin;
+  const absolute = (uri: string): string => {
+    try {
+      return new URL(uri, manifestUrl).toString();
+    } catch {
+      return uri;
+    }
+  };
   return manifestText
     .split(/\r?\n/)
     .map((line) => {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) return line;
-      if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
-        return `${origin}${trimmed}`;
+      if (!trimmed) return line;
+      if (trimmed.startsWith("#")) {
+        // Local playlists also need remote key, initialization, audio and subtitle
+        // references. Leaving these relative resolves them under the temp dir.
+        return line.replace(
+          /([:,])URI="([^"]*)"/gi,
+          (_match, prefix: string, uri: string) => `${prefix}URI="${absolute(uri)}"`,
+        );
       }
-      return line;
+      return absolute(trimmed);
     })
     .join("\n");
 }

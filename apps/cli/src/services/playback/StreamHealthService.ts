@@ -22,6 +22,7 @@ export type StreamHealthServiceDeps = {
 
 export type StreamHealthServiceResult = {
   readonly healthy: boolean;
+  readonly reachable: boolean;
   readonly checked: boolean;
   readonly strategy: StreamHealthStrategy;
   readonly reason: StreamHealthPolicyReason;
@@ -65,6 +66,7 @@ export class StreamHealthService {
 
     return {
       healthy: result.healthy,
+      reachable: result.probe?.status === "reachable",
       checked: result.probed,
       strategy: result.strategy,
       reason: result.policyReason,

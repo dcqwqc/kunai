@@ -20,6 +20,6 @@ describe("provider resolve budget policy", () => {
 
     expect(resolveProviderTotalDeadlineMs("fast")).toBe(15_000);
     expect(resolveProviderTotalDeadlineMs("balanced")).toBe(45_000);
-    expect(resolveProviderTotalDeadlineMs("quality-first")).toBe(120_000);
+    expect(resolveProviderTotalDeadlineMs("quality-first")).toBe(60_000);
   });
 });

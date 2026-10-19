@@ -19,7 +19,11 @@ export interface PlayerStatsSample {
   /** True when the demuxer is reading over the network (HTTP/HLS, etc.). */
   demuxerViaNetwork?: boolean;
   cacheSpeedBytesPerSecond?: number;
+  /** False for compatibility backends that expose no native mpv output evidence. */
+  videoOutputSupported?: boolean;
   voConfigured?: boolean;
+  /** Dimensions of a frame supplied by the decoder to video output. */
+  videoOutParams?: { w: number; h: number };
   eofReached?: boolean;
   idleActive?: boolean;
   coreIdle?: boolean;
@@ -352,6 +356,23 @@ export function applyObservedPropertySample(
         next.cacheSpeedBytesPerSecond = update.value;
       }
       break;
+    case "mpv-version":
+      next.videoOutputSupported = typeof update.value === "string" && update.value.length > 0;
+      break;
+    case "video-out-params": {
+      const params = update.value as { w?: unknown; h?: unknown } | null;
+      next.videoOutParams =
+        params &&
+        typeof params.w === "number" &&
+        typeof params.h === "number" &&
+        Number.isFinite(params.w) &&
+        Number.isFinite(params.h) &&
+        params.w > 0 &&
+        params.h > 0
+          ? { w: params.w, h: params.h }
+          : undefined;
+      break;
+    }
     case "vo-configured":
       next.voConfigured = Boolean(update.value);
       break;
@@ -407,7 +428,9 @@ function isPlaybackProgressProperty(name: string): boolean {
     case "demuxer-cache-state":
     case "demuxer-via-network":
     case "cache-speed":
+    case "mpv-version":
     case "vo-configured":
+    case "video-out-params":
     case "eof-reached":
     case "idle-active":
     case "core-idle":

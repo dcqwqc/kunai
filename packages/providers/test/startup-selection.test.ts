@@ -141,3 +141,15 @@ function streamCandidate(
     ...overrides,
   };
 }
+
+test("source dimensions and bitrate beat a provider label while manual stream selection wins", () => {
+  const rows = [
+    streamCandidate({ id: "misleading", qualityRank: 2160, qualityLabel: "4K" }),
+    streamCandidate({ id: "1080-low", height: 1080, bitrate: 3_000_000 }),
+    streamCandidate({ id: "1080-high", height: 1080, bitrate: 6_000_000 }),
+  ];
+  expect(selectReadyStream(rows, { qualityPreference: "best" }).selected.id).toBe("1080-high");
+  expect(selectReadyStream(rows, { preferredStreamId: "misleading" }).selected.id).toBe(
+    "misleading",
+  );
+});

@@ -1,6 +1,7 @@
 import type { StreamInfo, SubtitleTrack } from "@/domain/types";
 import { selectAutomaticSubtitle } from "@/subtitle";
 import {
+  compareStreamQuality,
   looksLikeHiSubtitle,
   normalizeIsoLanguageCode,
   subtitleLanguageDisplayName,
@@ -43,7 +44,9 @@ export function providerResolveResultToStreamInfo(
     return null;
   }
   const effectiveResult =
-    selected.id === result.selectedStreamId ? result : { ...result, selectedStreamId: selected.id };
+    selected.id === result.selectedStreamId
+      ? result
+      : { ...result, selectedStreamId: selected.id, streamReachabilityVerified: false };
 
   const subtitleList = result.subtitles.map(subtitleCandidateToTrack);
   const pickedSubtitle =
@@ -110,7 +113,7 @@ function selectPreferredStream(
   const fromSource = selection.selectedSourceId
     ? [...streams]
         .filter((stream) => stream.sourceId === selection.selectedSourceId)
-        .sort((left, right) => (right.qualityRank ?? 0) - (left.qualityRank ?? 0))[0]
+        .sort(compareStreamQuality)[0]
     : undefined;
   if (fromSource) return fromSource;
 

@@ -108,3 +108,42 @@ deciding whether to keep a loading presentation need the latter.
 - Diagnostics / shell may show **`mpv-in-process-reconnect`** events (`started` | `complete` | `failed`) with attempt number and a short `detail` (trigger + error when failed).
 - Seek policy lives in `apps/cli/src/infra/player/mpv-in-process-reconnect.ts` (`computeInProcessReconnectSeek`).
 - Presence updates from a superseded generation are dropped rather than sent.
+
+## Source failover and output evidence
+
+`automaticStreamFailover` defaults to `true`. It controls automatic source and
+provider recovery; explicit refresh, recovery and provider picks remain available
+when it is disabled. Same-URL retries still use the separate reconnect settings
+above. A persistent stall gets a further bounded recovery window before the file
+is stopped and the existing source/provider recovery loop resumes at the reliable
+position. That loop has a four-attempt episode budget and one provider hop.
+Automatic provider handoff suppresses the resume prompt. Reported audio and
+subtitle language choices, external subtitle selection, and subtitles-off carry
+within the same episode where the new source supports them; track IDs do not.
+
+Native mpv readiness requires video output dimensions and configured output,
+plus positive playback progress. A demuxed clock, successful HTTP probe or
+`file-loaded` alone is insufficient. Output/track properties are queried again
+after a replacement because observations may have arrived while callbacks were
+gated or may not change between files. Explicit audio-only track inventories
+remain playable. This verifies decoder/output evidence, not the visual contents
+of every frame; intentionally black footage is not classified as a failure.
+
+Compatibility backends that expose no native mpv version/output properties keep
+their clock-based playback path, explicitly reported as `backend-unverified`.
+The currently inspected external Showtime shim hardcodes output readiness and
+does not expose decoded frames. Kunai cannot prove video decode or detect
+advancing-audio black video in that backend until it supplies real output
+telemetry. It can handle its reported `loading_failed`/access-denied errors and
+clock stalls. These deterministic backend failures skip same-URL reconnect.
+No external shim, installation or live profile is changed by this feature.
+
+`prepareBackupStream` defaults to `true`. Once playback starts, one alternate
+source already in the current inventory may receive a bounded HTTP health check.
+It uses `EpisodePrefetchHandle` cancellation and identity checks, never another
+player or provider resolve. Presentation, audio and hard-sub context must match;
+expired, blocked, deferred and yt-dlp sources are excluded. A ready backup is
+preferred during failover, expires after one minute, and is discarded on intent
+changes, normal playback end or cancellation. HTTP readiness is not decoder proof;
+the active player still establishes output readiness after handoff. Media stays
+direct or on the existing local materializer/loopback path.

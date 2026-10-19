@@ -221,3 +221,28 @@ Switching anime title display preference must be a pure projection over `SearchR
 The source checkout currently requires Bun for development and local source runs. The codebase uses Bun-first APIs and tooling (`Bun.spawn`, `Bun.which`, `Bun.file`, `Bun.connect`, `Bun.hash`, workspaces, lockfile behavior).
 
 For beta, prefer reducing onboarding friction through packaged binaries or installer checks over porting the runtime to Node/npm. A Node-only source path is possible later, but it would add compatibility work across process, socket, filesystem, bundling, and package scripts without improving playback reliability first.
+
+## Source quality evidence
+
+The media language profiles default to `best` (including fresh YouTube profiles).
+Saved quality choices, favorite sources, explicit stream/provider choices and
+fast/provider-ready ordering remain authoritative. Selection uses source `height`
+when available and `bitrate` to break equal-resolution ties; labels remain hints
+when dimensions are unavailable. Adaptive/original labels carry no invented
+1080p rank. HLS `RESOLUTION` wins over `NAME`, and average bandwidth is kept in
+bits/second separately from resolution. Explicit quality within a pinned source
+still selects the requested rung. A manifest with separate audio stays whole so
+quality selection cannot discard its audio group.
+
+Balanced provider hedging may compare successes from already-running candidates
+for at most one additional second. A validated source with stronger quality
+evidence can win that window; it launches no extra candidates. Fast and explicit
+choices retain their policy, and quality-first retains sequential provider order
+with a sixty-second total resolve ceiling. This is best discovered playable
+quality within bounded work, not an exhaustive search of every provider.
+
+Local HLS materialization rebases segment and URI-attribute references (including
+keys, initialization maps, audio and subtitles) against the final manifest URL
+after guarded redirects. DASH materialization preserves provider headers for
+remote media. Neither mechanism adds DRM support or changes codec/host access
+requirements.

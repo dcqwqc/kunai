@@ -1,11 +1,10 @@
+import { capturePlaybackShellError } from "@/app-shell/playback-shell-error-capture";
 // =============================================================================
 // Playback Phase
 //
 // Handles episode selection → stream resolve → MPV playback → post-playback.
 // Returns when user wants to go back to search or switch mode.
 // =============================================================================
-
-import { capturePlaybackShellError } from "@/app-shell/playback-shell-error-capture";
 import {
   openTracksPanel,
   buildPickerActionContext,
@@ -262,6 +261,12 @@ import type { ResolveAttempt } from "@kunai/core";
 import type { MediaKind } from "@kunai/types";
 import type { ProviderFailure, ProviderId } from "@kunai/types";
 
+import {
+  selectPlaybackBackup,
+  checkPlaybackBackup,
+  isPlaybackBackupFresh,
+} from "./playback-backup";
+
 // Re-exported for tests that import it from this module's public surface.
 export type { PlaybackOutcome } from "@/app/playback/playback-outcome";
 export { playbackStartupStageForPlayerEvent };
@@ -349,6 +354,12 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
   private static readonly lateSubtitleInflight = new Set<string>();
   /** Session-scoped so the "set up subtitle search" note is shown once, not per episode. */
   private static wyzieKeyNoticeShown = false;
+  private trackContinuity: {
+    scope: string;
+    audio?: string;
+    subtitle?: string;
+    subtitleUrl?: string;
+  } | null = null;
   private playbackLedger: PlaybackHistoryLedger | null = null;
   private unregisterActiveCheckpoint: (() => void) | null = null;
 
@@ -615,6 +626,7 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
   async execute(title: TitleInfo, context: PhaseContext): Promise<PhaseResult<PlaybackOutcome>> {
     const { container } = context;
     PlaybackPhase.lateSubtitleInflight.clear();
+    this.trackContinuity = null;
     const {
       providerRegistry,
       stateManager,
@@ -636,6 +648,10 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
       playbackSession: createPlaybackSessionState({ autoNextEnabled: config.autoNext }),
       pendingStart: startFromBeginning(),
     });
+    const backupPrefetch = new EpisodePrefetchHandle();
+    let backupTarget: EpisodePrefetchTarget | null = null;
+    const cancelBackup = () => backupPrefetch.cancel("session-ended");
+    context.signal.addEventListener("abort", cancelBackup, { once: true });
     const isOfflineLaunch = title.launchSource === "offline-library";
     const selectionCoordinator = new PlaybackSelectionCoordinator({
       titleId: title.id,
@@ -1553,10 +1569,24 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
           }
 
           const prefetchTarget = buildPrefetchTarget(currentEpisode, currentProvider.metadata.id);
+          const readyBackup =
+            config.prepareBackupStream &&
+            sourceRefreshAction === "recover" &&
+            run.autoSourceRecoverAttempts > 0 &&
+            !pendingUserProviderSwitch &&
+            !recomputeSources
+              ? backupPrefetch.takeReadyFor(prefetchTarget)
+              : null;
+          backupPrefetch.cancel("new-playback-iteration");
+          backupTarget = null;
           const consumedBundle =
-            sourceRefreshDecision || pendingUserProviderSwitch
-              ? null
-              : episodePrefetch.takeReadyFor(prefetchTarget);
+            readyBackup &&
+            isPlaybackBackupFresh(readyBackup) &&
+            !deadStreamUrls.list(deadStreamScope).includes(readyBackup.stream.url)
+              ? readyBackup
+              : sourceRefreshDecision || pendingUserProviderSwitch
+                ? null
+                : episodePrefetch.takeReadyFor(prefetchTarget);
           const prefetchWasPrepared = consumedBundle?.prepared === true;
 
           let stream: StreamInfo | null = consumedBundle?.stream ?? null;
@@ -1715,7 +1745,9 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
               recomputeSources,
               pendingUserProviderSwitch,
               sourceRefreshDecision,
-              configuredRecoveryMode: config.recoveryMode,
+              configuredRecoveryMode: config.automaticStreamFailover
+                ? config.recoveryMode
+                : "manual",
             });
             if (resolvePolicy.shouldInvalidateSuspectResolveState) {
               await invalidateEpisodePlaybackCaches({
@@ -2515,6 +2547,23 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
               providerHandoff.successfulProviderId,
               playbackIterationAbort.signal,
               () => {
+                if (
+                  config.prepareBackupStream &&
+                  !isOfflineLaunch &&
+                  config.automaticStreamFailover
+                ) {
+                  const bundle = selectPlaybackBackup(
+                    preparedStream,
+                    buildPrefetchTarget(currentEpisode, resolvedProviderId),
+                    deadStreamUrls.list(deadStreamScope),
+                  );
+                  if (bundle) {
+                    backupTarget = bundle.target;
+                    backupPrefetch.schedule(bundle.target, (signal) =>
+                      checkPlaybackBackup(bundle, signal),
+                    );
+                  }
+                }
                 run.playbackSession = confirmPlaybackStart({
                   session: run.playbackSession,
                   transition: (session, event) =>
@@ -2528,6 +2577,7 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
                 });
               },
               run.localPlaybackSource ?? undefined,
+              cancelBackup,
             );
           } catch (error) {
             run.pendingStart = startIntent;
@@ -2540,6 +2590,14 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
             throw error;
           }
 
+          if (
+            !result.suspectedDeadStream &&
+            result.endReason !== "error" &&
+            !didPlaybackFailToStart(result)
+          ) {
+            backupPrefetch.cancel("playback-ended");
+            backupTarget = null;
+          }
           if (didPlaybackFailToStart(result) || result.watchedSeconds === 0) {
             run.pendingStart = startIntent;
           }
@@ -2808,7 +2866,9 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
           // user's session preference had changed just because they closed mpv.
           // Only an explicit toggle changes the visible autoplay setting.
           let shouldAutoFallbackProvider =
-            playbackDecision.shouldFallbackProvider && !isOfflineLaunch;
+            playbackDecision.shouldFallbackProvider &&
+            !isOfflineLaunch &&
+            (config.automaticStreamFailover || playbackControlAction === "fallback");
           if (!providerRecoveryAllowed && playbackDecision.shouldRefreshSource) {
             const isExplicitLocalRelaunch =
               playbackControlAction === "refresh" || playbackControlAction === "recover";
@@ -2851,7 +2911,14 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
             return { status: "success", value: "back_to_results" };
           }
 
-          if (providerRecoveryAllowed && playbackDecision.shouldRefreshSource) {
+          if (
+            providerRecoveryAllowed &&
+            playbackDecision.shouldRefreshSource &&
+            (config.automaticStreamFailover ||
+              playbackControlAction === "refresh" ||
+              playbackControlAction === "recover" ||
+              playbackControlAction === "recompute")
+          ) {
             const isExplicitSourceRefresh =
               playbackControlAction === "refresh" || playbackControlAction === "recover";
             const isAutoSourceRecover =
@@ -2908,8 +2975,27 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
                 run.triedFailoverSourceIds.push(currentSourceId);
               }
 
+              const verifiedBackup = backupTarget
+                ? backupPrefetch.peekReadyFor(backupTarget)
+                : null;
+              const backupSourceId =
+                verifiedBackup && isPlaybackBackupFresh(verifiedBackup)
+                  ? verifiedBackup.target.sourceId
+                  : null;
+              const catalogSourceIds = listOrderedPlaybackSourceIds(
+                preparedStream.providerResolveResult,
+              );
+              const sourceIds = backupSourceId
+                ? [
+                    ...new Set([
+                      ...(currentSourceId ? [currentSourceId] : []),
+                      backupSourceId,
+                      ...catalogSourceIds,
+                    ]),
+                  ]
+                : catalogSourceIds;
               const failoverPlan = planStartupFailover({
-                sourceIds: listOrderedPlaybackSourceIds(preparedStream.providerResolveResult),
+                sourceIds,
                 currentSourceId,
                 triedSourceIds: new Set(run.triedFailoverSourceIds),
                 hasFallbackProvider: Boolean(
@@ -3048,13 +3134,10 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
           }
 
           if (shouldAutoFallbackProvider) {
-            run.pendingStart = startEpisodeNavigation({
-              targetResumeSeconds: toHistoryTimestamp(
-                result,
-                effectiveTiming.current,
-                quitThresholdMode,
-              ),
-            });
+            run.pendingStart = startAtResumePoint(
+              toHistoryTimestamp(result, effectiveTiming.current, quitThresholdMode),
+              { suppressResumePrompt: true },
+            );
             const fallback = pickCompatibleFallbackProvider({
               providers: providerRegistry.getCompatible(title, stateManager.getState().mode),
               currentProviderId: resolvedProviderId,
@@ -3824,6 +3907,8 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
         }),
       };
     } finally {
+      cancelBackup();
+      context.signal.removeEventListener("abort", cancelBackup);
       queueAttempt?.rollbackIfUnacknowledged("playback-aborted");
       this.updatePlaybackFeedback(context, { detail: null, note: null });
       await player.releasePersistentSession();
@@ -3934,7 +4019,7 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
         startupPriority: config.startupPriority,
         selectedSourceId: input.target?.sourceId,
         selectedStreamId: input.target?.streamId,
-        recoveryMode: config.recoveryMode,
+        recoveryMode: config.automaticStreamFailover ? config.recoveryMode : "manual",
         signal: input.signal,
         onEvent: (event) => {
           if (event.type === "cache-hit" || event.type === "cache-hit-validated") {
@@ -4083,6 +4168,7 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
     playbackIterationSignal?: AbortSignal,
     onConfirmedPlaybackStart?: () => void,
     localPlaybackSource?: LocalPlaybackSource,
+    onTrackSelectionChanged?: () => void,
   ): Promise<PlaybackResult> {
     const {
       player,
@@ -4094,6 +4180,16 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
       diagnosticsService,
     } = context.container;
 
+    const trackScope = recentPlaybackStreamKey(title.id, episode);
+    if (this.trackContinuity?.scope !== trackScope) this.trackContinuity = { scope: trackScope };
+    const continuity = this.trackContinuity;
+    if (continuity.subtitle === "none") stream = { ...stream, subtitle: undefined };
+    else if (continuity.subtitleUrl) stream = { ...stream, subtitle: continuity.subtitleUrl };
+    else if (continuity.subtitle && stream.subtitleList) {
+      const selected = selectAutomaticSubtitle(stream.subtitleList, continuity.subtitle);
+      if (selected) stream = { ...stream, subtitle: selected.url };
+    }
+
     const subtitleStatus = describePlaybackSubtitleStatus(
       stream,
       playbackSubtitlePreference({
@@ -4103,13 +4199,14 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
       }),
     );
 
-    this.startLateSubtitleResolver({
-      stream,
-      title,
-      episode,
-      context,
-      playbackIterationSignal,
-    });
+    if (!continuity.subtitle)
+      this.startLateSubtitleResolver({
+        stream,
+        title,
+        episode,
+        context,
+        playbackIterationSignal,
+      });
 
     const playbackProviderId = successfulProviderId ?? stateManager.getState().provider;
     // One cycle has one start instant. Recomputing it per update made every
@@ -4176,16 +4273,20 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
       },
       playOptions: {
         abortSignal: context.signal,
-        audioPreference: playbackAudioPreference({
-          mode: stateManager.getState().mode,
-          title,
-          config,
-        }),
-        subtitlePreference: playbackSubtitlePreference({
-          mode: stateManager.getState().mode,
-          title,
-          config,
-        }),
+        audioPreference:
+          continuity.audio ??
+          playbackAudioPreference({
+            mode: stateManager.getState().mode,
+            title,
+            config,
+          }),
+        subtitlePreference:
+          continuity.subtitle ??
+          playbackSubtitlePreference({
+            mode: stateManager.getState().mode,
+            title,
+            config,
+          }),
         qualityPreference: playbackQualityPreference({
           mode: stateManager.getState().mode,
           title,
@@ -4229,7 +4330,11 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
           );
           const active = playerControl.getActive();
           if (!active) return;
-          void active.stop("startup-stall").catch(() => {
+          void (
+            active.stopCurrentFile
+              ? active.stopCurrentFile("stream-failure")
+              : active.stop("stream-failure")
+          ).catch(() => {
             /* best-effort abort; suspectedDeadStream is set on return */
           });
         },
@@ -4307,6 +4412,12 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
         },
         applyPlaybackStatusSignal: (signal) => this.applyPlaybackStatusSignal(context, signal),
         onTrackChanged: (event) => {
+          onTrackSelectionChanged?.();
+          if (event.trackType === "audio" && event.language) continuity.audio = event.language;
+          if (event.trackType === "sub") {
+            continuity.subtitle = event.id === 0 ? "none" : event.language;
+            continuity.subtitleUrl = event.id === 0 ? undefined : event.url;
+          }
           const currentStream = stateManager.getState().stream;
           if (currentStream && event.trackType === "sub" && event.id === 0) {
             stateManager.dispatch({

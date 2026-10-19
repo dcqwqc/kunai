@@ -190,9 +190,8 @@ export function qualityRankFromLabel(value: string | number | undefined): number
   if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
   const label = normalizeQualityLabel(value);
   if (!label) return undefined;
-  // Adaptive/auto HLS ladders typically top out at 1080p+; treat as high-rank so
-  // they are not sorted below explicit 360p/480p rows from other sources.
-  if (label === "auto" || label === "default" || label === "org") return 1080;
+  // An adaptive or original label says nothing about the source resolution.
+  if (label === "auto" || label === "default" || label === "org") return 0;
   if (label === "4k" || label === "uhd" || label.includes("2160")) return 2160;
   const match = label.match(/(\d{3,4})\s*p?/i);
   if (!match?.[1]) return undefined;

@@ -29,5 +29,7 @@ export async function extractQualitiesFromMaster(
     url: variant.url,
     qualityLabel: variant.qualityLabel,
     qualityRank: variant.qualityRank,
+    height: variant.height,
+    bitrate: variant.bandwidth,
   }));
 }

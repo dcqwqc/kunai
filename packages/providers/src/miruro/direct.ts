@@ -461,6 +461,7 @@ export async function createMiruroResultFromPayload({
       flavorLabel: displaySourceLabel,
       qualityLabel,
       qualityRank,
+      height: raw.resolution?.height,
       languageEvidence,
       sourceEvidence,
       artwork,

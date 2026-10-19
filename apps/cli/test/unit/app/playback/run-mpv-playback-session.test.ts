@@ -424,3 +424,73 @@ describe("runMpvPlaybackSession completion", () => {
     ).toEqual(LOCAL_SOURCE);
   });
 });
+
+describe("bounded playback recovery", () => {
+  async function withTimers(script: (emit: Emit, fire: (ms: number) => void) => void) {
+    const originalSet = globalThis.setTimeout;
+    const originalClear = globalThis.clearTimeout;
+    const timers = new Map<number, { callback: () => void; ms: number }>();
+    let id = 0;
+    globalThis.setTimeout = ((callback: () => void, ms: number) => {
+      const key = ++id;
+      timers.set(key, { callback, ms });
+      return key;
+    }) as unknown as typeof setTimeout;
+    globalThis.clearTimeout = ((key: number) => {
+      timers.delete(Number(key));
+    }) as unknown as typeof clearTimeout;
+    try {
+      return await runSession((emit) =>
+        script(emit, (ms) => {
+          for (const [key, timer] of timers)
+            if (timer.ms === ms) {
+              timers.delete(key);
+              timer.callback();
+            }
+        }),
+      );
+    } finally {
+      globalThis.setTimeout = originalSet;
+      globalThis.clearTimeout = originalClear;
+    }
+  }
+
+  test("no decoded start fails even if a short file claims EOF", async () => {
+    const harness = await withTimers((emit) => {
+      emit({ type: "mpv-process-started" });
+    });
+    expect(harness.result.suspectedDeadStream).toBe(true);
+    expect(harness.result.endReason).toBe("error");
+  });
+
+  test("startup timeout enters failover without any clock or frame evidence", async () => {
+    const harness = await withTimers((emit, fire) => {
+      emit({ type: "mpv-process-started" });
+      fire(45_000);
+    });
+    expect(harness.result.suspectedDeadStream).toBe(true);
+  });
+
+  test("a later unresolved stall exits at the trusted timestamp", async () => {
+    const harness = await withTimers((emit, fire) => {
+      emit({ type: "mpv-process-started" });
+      emit({ type: "playback-started" });
+      emit({ type: "playback-progress", positionSeconds: 120, durationSeconds: 600 });
+      emit({ type: "stream-stalled", secondsWithoutProgress: 20 });
+      fire(12_000);
+    });
+    expect(harness.result.suspectedDeadStream).toBe(true);
+    expect(harness.result.endReason).toBe("error");
+    expect(harness.result.lastReliableProgressSeconds).toBe(120);
+  });
+
+  test("fresh progress cancels pending stall recovery", async () => {
+    const harness = await withTimers((emit, fire) => {
+      emit({ type: "playback-started" });
+      emit({ type: "stream-stalled", secondsWithoutProgress: 20 });
+      emit({ type: "playback-progress", positionSeconds: 121, durationSeconds: 600 });
+      fire(12_000);
+    });
+    expect(harness.result.suspectedDeadStream).not.toBe(true);
+  });
+});

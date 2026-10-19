@@ -273,3 +273,37 @@ describe("hls rendition tracks (#EXT-X-MEDIA)", () => {
     expect(isHlsDeadHostStatus(undefined)).toBe(false);
   });
 });
+
+test("HLS resolution outranks misleading NAME and average bandwidth stays separate from height", async () => {
+  const body = `#EXTM3U
+#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=2000000,BANDWIDTH=9000000,RESOLUTION=1280x720,NAME="4k"
+low.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,NAME="SD"
+high.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=50000000,NAME="auto"
+unknown.m3u8`;
+  const result = await expandHlsMasterInventory({
+    masterUrl: "https://cdn.example/master.m3u8",
+    fetch: async () => new Response(body),
+  });
+  expect(result.variants.map((row) => row.qualityRank)).toEqual([1080, 720, 0]);
+  expect(result.variants[1]).toMatchObject({
+    height: 720,
+    qualityLabel: "720p",
+    bandwidth: 2000000,
+  });
+});
+
+test("redirected HLS ladders resolve variants against the final public manifest URL", async () => {
+  const result = await expandHlsMasterInventory({
+    masterUrl: "https://cdn.example/start.m3u8",
+    fetch: async (url: string | URL | Request) =>
+      String(url).endsWith("start.m3u8")
+        ? new Response(null, {
+            status: 302,
+            headers: { location: "https://other.example/title/master.m3u8" },
+          })
+        : new Response(MASTER),
+  });
+  expect(result.variants[0]?.url).toBe("https://other.example/title/1080p.m3u8");
+});

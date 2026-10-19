@@ -34,7 +34,8 @@ export async function materializeDeferredMediaForPlayback(
       stream: {
         ...stream,
         url: mpdPath,
-        headers: {},
+        // The MPD is local; its media requests still need the provider headers.
+        headers: stream.headers,
       },
       cleanup: async () => {
         releaseAllMangaAkDeferredLocator(stream.deferredLocator ?? "");

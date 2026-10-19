@@ -71,6 +71,8 @@ async function runPlaybackLifecycle(
   await Bun.sleep(20);
   emit(sock, { event: "file-loaded" });
   appendEvidence({ type: "file-loaded", url });
+  emit(sock, { event: "property-change", name: "vo-configured", data: true });
+  emit(sock, { event: "property-change", name: "video-out-params", data: { w: 1920, h: 1080 } });
   emit(sock, { event: "property-change", name: "duration", data: 600 });
   emit(sock, { event: "property-change", name: "time-pos", data: 12 });
   appendEvidence({ type: "playback-properties", duration: 600, timePos: 12 });

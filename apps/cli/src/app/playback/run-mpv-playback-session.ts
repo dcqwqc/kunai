@@ -134,6 +134,7 @@ export async function runMpvPlaybackSession(
   let latestPresenceDurationSeconds = 0;
   let bootstrapStallTimer: ReturnType<typeof setTimeout> | null = null;
   let startupStallFired = false;
+  let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   let startupStallArmed = false;
   let confirmedPlaybackStartNotified = false;
   /** Installed synchronously by `onGenerationActivated`, before any player event. */
@@ -144,6 +145,17 @@ export async function runMpvPlaybackSession(
       clearTimeout(bootstrapStallTimer);
       bootstrapStallTimer = null;
     }
+  };
+
+  const abortFailedPlayback = () => {
+    if (startupStallFired || !activeGeneration) return;
+    const decision = hooks.applyPlaybackStatusSignal({
+      kind: "startup-stall",
+      generation: activeGeneration,
+    });
+    if (!decision.accepted) return;
+    startupStallFired = true;
+    void Promise.resolve(hooks.onStartupStallAbort?.()).catch(() => {});
   };
 
   const armStartupStallWatchdog = () => {
@@ -236,6 +248,22 @@ export async function runMpvPlaybackSession(
 
         if (startupStage === "first-progress" || event.type === "playback-started") {
           clearBootstrapStallTimer();
+          if (recoveryTimer !== null) clearTimeout(recoveryTimer);
+          recoveryTimer = null;
+        }
+        // Give the existing in-process reconnect a short chance to recover.
+        // A persistent stall must then leave play() so bounded source failover can run.
+        if (event.type === "stream-stalled" && recoveryTimer === null) {
+          recoveryTimer = setTimeout(abortFailedPlayback, 12_000);
+        }
+        if (event.type === "playback-paused") {
+          clearBootstrapStallTimer();
+          startupStallArmed = false;
+          if (recoveryTimer !== null) clearTimeout(recoveryTimer);
+          recoveryTimer = null;
+        }
+        if (event.type === "playback-resumed" && !confirmedPlaybackStartNotified) {
+          armStartupStallWatchdog();
         }
 
         if (event.type !== "network-sample") {
@@ -304,13 +332,32 @@ export async function runMpvPlaybackSession(
 
     // The startup watchdog rewrites the result before completion is applied, so
     // a watchdog failure completes as `error` rather than briefly as `finished`.
-    const finalResult = startupStallFired
-      ? {
-          ...result,
-          suspectedDeadStream: true,
-          endReason: result.endReason === "eof" ? result.endReason : ("error" as const),
-        }
-      : result;
+    const finalResult =
+      startupStallFired ||
+      (!confirmedPlaybackStartNotified &&
+        result.endReason !== "quit" &&
+        (startupStallArmed || result.suspectedDeadStream === true || result.endReason === "error"))
+        ? {
+            ...result,
+            // Prefer the player's reliable position, including backward seeks.
+            lastReliableProgressSeconds: confirmedPlaybackStartNotified
+              ? (result.lastReliableProgressSeconds ?? latestPresencePositionSeconds)
+              : input.startAt,
+            watchedSeconds: confirmedPlaybackStartNotified
+              ? (result.lastReliableProgressSeconds ??
+                Math.max(result.watchedSeconds, latestPresencePositionSeconds))
+              : input.startAt,
+            lastNonZeroPositionSeconds: confirmedPlaybackStartNotified
+              ? result.lastNonZeroPositionSeconds
+              : input.startAt,
+            lastTrustedProgressSeconds: confirmedPlaybackStartNotified
+              ? result.lastTrustedProgressSeconds
+              : input.startAt,
+            duration: Math.max(result.duration, latestPresenceDurationSeconds),
+            suspectedDeadStream: true,
+            endReason: "error" as const,
+          }
+        : result;
 
     if (activeGeneration) {
       hooks.applyPlaybackStatusSignal({
@@ -322,5 +369,6 @@ export async function runMpvPlaybackSession(
     return finalResult;
   } finally {
     clearBootstrapStallTimer();
+    if (recoveryTimer !== null) clearTimeout(recoveryTimer);
   }
 }

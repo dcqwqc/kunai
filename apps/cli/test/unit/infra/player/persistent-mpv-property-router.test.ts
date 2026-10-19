@@ -155,11 +155,17 @@ describe("PersistentMpvPropertyRouter", () => {
       },
     });
 
+    router.handlePropertyUpdate({ name: "vo-configured", value: true, observedAt: 1 });
+    router.handlePropertyUpdate({
+      name: "video-out-params",
+      value: { w: 1920, h: 1080 },
+      observedAt: 1,
+    });
     router.handlePropertyUpdate({ name: "duration", value: 600, observedAt: 1 });
     router.handlePropertyUpdate({ name: "time-pos", value: 30, observedAt: 2 });
 
     expect(currentPosition).toBe(30);
-    expect(events).toContainEqual({ type: "playback-started" });
+    expect(events).toContainEqual({ type: "playback-started", readiness: "decoded-video" });
     expect(events).toContainEqual({
       type: "watchdog",
       positionSeconds: 30,
@@ -234,6 +240,11 @@ describe("PersistentMpvPropertyRouter", () => {
     });
 
     router.handlePropertyUpdate({
+      name: "track-list",
+      value: [{ type: "audio", id: 2, lang: "de" }],
+      observedAt: 0,
+    });
+    router.handlePropertyUpdate({
       name: "user-data/kunai-track-changed",
       value: "audio:2",
       observedAt: 1,
@@ -253,7 +264,7 @@ describe("PersistentMpvPropertyRouter", () => {
     }
 
     expect(events).toEqual([
-      { type: "track-changed", trackType: "audio", id: 2 },
+      { type: "track-changed", trackType: "audio", id: 2, language: "de" },
       { type: "track-changed", trackType: "sub", id: 0 },
     ]);
     // The property is cleared once per observed value either way.

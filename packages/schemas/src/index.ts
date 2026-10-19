@@ -207,6 +207,8 @@ export const streamCandidateSchema = z.object({
   serverName: z.string().min(1).optional(),
   qualityLabel: z.string().min(1).optional(),
   qualityRank: z.number().int().optional(),
+  height: z.number().int().positive().optional(),
+  bitrate: z.number().positive().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   expiresAt: z.iso.datetime().optional(),
   languageEvidence: z.array(providerLanguageEvidenceSchema).optional(),

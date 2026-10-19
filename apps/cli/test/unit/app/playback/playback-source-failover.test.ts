@@ -123,3 +123,19 @@ describe("playback-source-failover", () => {
     expect(listOrderedPlaybackSourceIds(result)).toEqual(["source:yoru", "source:neon"]);
   });
 });
+
+test("source failover wraps to an earlier untried source without revisiting failed sources", () => {
+  expect(pickNextCatalogSourceId(["a", "b", "c"], "c", new Set(["c", "a"]))).toBe("b");
+});
+
+test("known exhausted sources never become automatic fallback targets", () => {
+  const result = {
+    sources: [
+      { id: "dead", status: "failed" },
+      { id: "exhausted", status: "exhausted" },
+      { id: "ready", status: "available" },
+    ],
+    streams: [],
+  } as never;
+  expect(listOrderedPlaybackSourceIds(result)).toEqual(["ready"]);
+});

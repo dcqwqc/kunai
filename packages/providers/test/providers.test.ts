@@ -1637,8 +1637,8 @@ test("source inventory helpers create stable ids and provider evidence", () => {
   expect(normalizeQualityLabel("Full HD")).toBe("1080p");
   expect(normalizeQualityLabel("4K")).toBe("2160p");
   expect(qualityRankFromLabel("720p")).toBe(720);
-  // Adaptive "auto" ladders are ranked as 1080 so they are not sorted below 360p rows.
-  expect(qualityRankFromLabel("auto")).toBe(1080);
+  // Adaptive labels do not prove any resolution.
+  expect(qualityRankFromLabel("auto")).toBe(0);
   expect(normalizeProviderDisplayLabel("mb-flix")).toBe("MB Flix");
   expect(normalizeProviderDisplayLabel("primevids")).toBe("PrimeVids");
   expect(normalizeProviderDisplayLabel("flow_cast")).toBe("Flow Cast");

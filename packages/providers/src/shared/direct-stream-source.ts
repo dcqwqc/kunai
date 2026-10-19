@@ -1,3 +1,4 @@
+import { compareStreamQuality } from "@kunai/core";
 import { createProviderCachePolicy, createResolveTrace, createTraceStep } from "@kunai/core";
 import type {
   CachePolicy,
@@ -23,6 +24,7 @@ import {
   normalizeQualityLabel,
   qualityRankFromLabel,
 } from "./source-inventory";
+import { selectReadyStream } from "./startup-selection";
 import { normalizeIsoLanguageCode } from "./subtitle-helpers";
 import { createTimeoutSignal } from "./timeout-signal";
 
@@ -37,6 +39,8 @@ export interface DirectStreamInput {
   readonly url: string;
   /** Quality hint such as "1080", "720p", "4k" — used for label + ranking. */
   readonly qualityHint?: string;
+  readonly height?: number;
+  readonly bitrate?: number;
   readonly serverLabel?: string;
   readonly audioLanguages?: readonly string[];
   readonly presentation?: import("@kunai/types").StreamPresentation;
@@ -173,9 +177,7 @@ export async function resolveDirectStreamSource(
           options.splitSourcesByServer,
         )
       : [];
-    const preferredStream =
-      streams.find((stream) => stream.id === input.preferredStreamId) ??
-      streams.find((stream) => stream.sourceId === input.preferredSourceId);
+    const preferredStream = streams.length ? selectReadyStream(streams, input).selected : undefined;
     const orderedStreams = preferredStream
       ? [preferredStream, ...streams.filter((stream) => stream.id !== preferredStream.id)]
       : streams;
@@ -447,7 +449,9 @@ function normalizeStreams(
       protocol,
       container: containerForProtocol(protocol),
       qualityLabel,
-      qualityRank,
+      qualityRank: entry.height ?? qualityRank,
+      height: entry.height,
+      bitrate: entry.bitrate,
       serverName: entry.serverLabel ?? label,
       flavorLabel: entry.serverLabel ?? label,
       audioLanguages: entry.audioLanguages,
@@ -458,7 +462,7 @@ function normalizeStreams(
     });
   }
 
-  return streams.sort((a, b) => (b.qualityRank ?? 0) - (a.qualityRank ?? 0));
+  return streams.sort(compareStreamQuality);
 }
 
 function normalizeSubtitles(

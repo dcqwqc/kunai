@@ -239,3 +239,15 @@ function makeStream(
     ...overrides,
   };
 }
+
+test("changing the inventory selection cannot reuse another stream's HTTP attestation", () => {
+  const result = { ...makeResolveResult(), streamReachabilityVerified: true };
+  const stream = providerResolveResultToStreamInfo({
+    result,
+    title: "Test",
+    subtitlePreference: "none",
+    selectedStreamId: "stream-b-720",
+  });
+  expect(stream?.providerResolveResult?.selectedStreamId).toBe("stream-b-720");
+  expect(stream?.providerResolveResult?.streamReachabilityVerified).toBe(false);
+});

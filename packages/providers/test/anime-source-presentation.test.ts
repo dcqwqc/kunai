@@ -45,11 +45,11 @@ describe("anime source presentation", () => {
   test("quality fields normalize auto and height ranks for both anime providers", () => {
     expect(animeQualityFields("1080p")).toEqual({ qualityLabel: "1080p", qualityRank: 1080 });
     expect(animeQualityFields("1080")).toEqual({ qualityLabel: "1080p", qualityRank: 1080 });
-    expect(animeQualityFields("auto").qualityRank).toBe(1080);
-    expect(animeQualityFields("default").qualityRank).toBe(1080);
+    expect(animeQualityFields("auto").qualityRank).toBe(0);
+    expect(animeQualityFields("default").qualityRank).toBe(0);
     expect(animeQualityFields(undefined, 720)).toEqual({ qualityLabel: "720p", qualityRank: 720 });
-    // Prefer explicit quality string over fallback height when both exist.
-    expect(animeQualityFields("480", 1080)).toEqual({ qualityLabel: "480p", qualityRank: 480 });
+    // Source dimensions outrank a conflicting provider label.
+    expect(animeQualityFields("480", 1080)).toEqual({ qualityLabel: "1080p", qualityRank: 1080 });
   });
 
   test("maps provider-specific subtitle delivery enums onto shared modes", () => {

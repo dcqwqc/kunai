@@ -10,6 +10,7 @@ export type HlsLadderVariant = {
   readonly qualityLabel: string;
   readonly qualityRank: number;
   readonly bandwidth?: number;
+  readonly height?: number;
 };
 
 /** A resolved `#EXT-X-MEDIA` rendition — an alternate audio or subtitle playlist. */
@@ -121,6 +122,7 @@ export async function expandHlsMasterInventory(
       return empty({ kind: "http-error", httpStatus: response.status });
     }
 
+    const effectiveMasterUrl = outcome.finalUrl ?? (response.url || masterUrl);
     const text = await response.text();
     if (!isHlsMasterPlaylist(text)) {
       return empty({ kind: "not-master", httpStatus: response.status });
@@ -133,7 +135,7 @@ export async function expandHlsMasterInventory(
     // only labels audio already muxed into each variant, so it does not trip
     // this.
     if (masterVariantsNeedSeparateAudio(text)) {
-      const renditions = parseHlsMasterRenditions(text, masterUrl);
+      const renditions = parseHlsMasterRenditions(text, effectiveMasterUrl);
       return {
         variants: [fallback],
         ...renditions,
@@ -141,14 +143,17 @@ export async function expandHlsMasterInventory(
       };
     }
 
-    const variants = parseHlsMasterVariants(text, masterUrl);
+    const variants = parseHlsMasterVariants(text, effectiveMasterUrl);
     if (variants.length === 0) {
       return empty({ kind: "not-master", httpStatus: response.status });
     }
 
-    const sorted = [...variants].sort((left, right) => right.qualityRank - left.qualityRank);
+    const sorted = [...variants].sort(
+      (left, right) =>
+        right.qualityRank - left.qualityRank || (right.bandwidth ?? 0) - (left.bandwidth ?? 0),
+    );
     const capped = maxVariants > 0 ? sorted.slice(0, maxVariants) : sorted;
-    const renditions = parseHlsMasterRenditions(text, masterUrl);
+    const renditions = parseHlsMasterRenditions(text, effectiveMasterUrl);
     return { variants: capped, ...renditions, probe: { kind: "ok", httpStatus: response.status } };
   } catch {
     return empty({ kind: "network" });
@@ -249,7 +254,8 @@ export function parseHlsMasterVariants(
     if (line.startsWith("#EXT-X-STREAM-INF:")) {
       const resMatch = /RESOLUTION=\d+x(\d+)/i.exec(line);
       currentResolution = resMatch?.[1] ? `${resMatch[1]}p` : "";
-      const bwMatch = /BANDWIDTH=(\d+)/i.exec(line);
+      const bwMatch =
+        /(?:[:,])AVERAGE-BANDWIDTH=(\d+)/i.exec(line) ?? /(?:[:,])BANDWIDTH=(\d+)/i.exec(line);
       currentBandwidth = bwMatch?.[1] ? Number.parseInt(bwMatch[1], 10) : 0;
       const nameMatch = /NAME="([^"]+)"/i.exec(line);
       currentName = nameMatch?.[1]?.trim() ?? "";
@@ -259,7 +265,7 @@ export function parseHlsMasterVariants(
     if (!currentResolution && !currentName && currentBandwidth <= 0) continue;
 
     const absoluteUrl = resolveHlsVariantUrl(masterUrl, line);
-    const labelSource = currentName || currentResolution || (currentBandwidth > 0 ? "auto" : "");
+    const labelSource = currentResolution || currentName || (currentBandwidth > 0 ? "auto" : "");
     if (!labelSource || !absoluteUrl) {
       currentResolution = "";
       currentBandwidth = 0;
@@ -272,15 +278,14 @@ export function parseHlsMasterVariants(
     // was dead. A 0 simply ranks the variant lowest, which is what an
     // unlabeled, unres'd row means.
     const qualityRank =
-      qualityRankFromLabel(qualityLabel) ??
-      qualityRankFromLabel(currentResolution) ??
-      currentBandwidth;
+      qualityRankFromLabel(currentResolution) ?? qualityRankFromLabel(qualityLabel) ?? 0;
 
     variants.push({
       url: absoluteUrl,
       qualityLabel,
       qualityRank,
       bandwidth: currentBandwidth > 0 ? currentBandwidth : undefined,
+      height: currentResolution ? Number.parseInt(currentResolution, 10) : undefined,
     });
 
     currentResolution = "";

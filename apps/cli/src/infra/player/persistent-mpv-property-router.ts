@@ -1,6 +1,7 @@
 import type { PlaybackTimingMetadata, SubtitleTrack } from "@/domain/types";
 
 import type { MpvIpcSession } from "./mpv-ipc";
+import { hasPlayableOutput, playbackOutputReadiness } from "./mpv-playback-kernel";
 import { applyObservedPropertySample, type PlayerStatsState } from "./mpv-stats";
 import type { PersistentSubtitleManager } from "./persistent-subtitle-manager";
 import type { MpvRequestedAction } from "./PlayerControlService";
@@ -101,11 +102,19 @@ export class PersistentMpvPropertyRouter {
         previousPositionSeconds,
         value,
       );
-      if (value > 0 && !active.playerStartedNotified) {
+      if (
+        value > 0 &&
+        hasPlayableOutput(active.stats.latestIpcSample) &&
+        !active.playerStartedNotified
+      ) {
         active.playerStartedNotified = true;
-        active.onPlaybackEvent?.({ type: "playback-started" });
+        active.onPlaybackEvent?.({
+          type: "playback-started",
+          readiness: playbackOutputReadiness(active.stats.latestIpcSample),
+        });
       }
-      this.deps.maybeEmitPlaybackProgress(active, observedAt);
+      if (hasPlayableOutput(active.stats.latestIpcSample))
+        this.deps.maybeEmitPlaybackProgress(active, observedAt);
       void this.deps.handleSegmentSkipProgress(this.deps.getCurrentOptions());
       this.deps.fireNearEofIfNeeded(value);
     }
@@ -173,11 +182,19 @@ export class PersistentMpvPropertyRouter {
     if (trackMatch) {
       const id = Number.parseInt(trackMatch[2] ?? "", 10);
       if (id >= 0) {
+        const rows = this.deps.subtitleManager.currentTrackList();
+        const track = Array.isArray(rows)
+          ? rows.find((row) => row?.type === trackMatch[1] && row?.id === id)
+          : undefined;
         this.deps.getCurrentOptions().onPlaybackEvent?.({
           type: "track-changed",
           // SAFETY: the trackMatch regex alternation only captures "audio" or "sub".
           trackType: trackMatch[1] as "audio" | "sub",
           id,
+          ...(typeof track?.lang === "string" ? { language: track.lang } : {}),
+          ...(typeof track?.["external-filename"] === "string"
+            ? { url: track["external-filename"] }
+            : {}),
         });
       }
     }

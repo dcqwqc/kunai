@@ -26,7 +26,14 @@ export function listOrderedPlaybackSourceIds(
 ): readonly string[] {
   if (!result) return [];
   if (result.sources && result.sources.length > 0) {
-    return result.sources.map((source) => source.id);
+    return result.sources
+      .filter(
+        (source) =>
+          source.status !== "failed" &&
+          source.status !== "exhausted" &&
+          source.status !== "skipped",
+      )
+      .map((source) => source.id);
   }
   const seen = new Set<string>();
   const ids: string[] = [];
@@ -48,8 +55,8 @@ export function pickNextCatalogSourceId(
   if (sourceIds.length === 0) return null;
   const current = currentSourceId?.trim() || null;
   const startIndex = current ? sourceIds.indexOf(current) : -1;
-  for (let index = Math.max(0, startIndex + 1); index < sourceIds.length; index += 1) {
-    const candidate = sourceIds[index];
+  for (let offset = 1; offset <= sourceIds.length; offset += 1) {
+    const candidate = sourceIds[(startIndex + offset) % sourceIds.length];
     if (!candidate || triedSourceIds.has(candidate)) continue;
     if (candidate === current) continue;
     return candidate;

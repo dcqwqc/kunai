@@ -49,7 +49,7 @@ export type PlayerPlaybackEvent =
   | { type: "subtitle-attached"; trackCount: number }
   | { type: "late-subtitles-attached"; trackCount: number }
   | { type: "player-ready" }
-  | { type: "playback-started" }
+  | { type: "playback-started"; readiness?: "decoded-video" | "audio-only" | "backend-unverified" }
   | { type: "playback-progress"; positionSeconds: number; durationSeconds: number }
   | { type: "playback-paused" }
   | { type: "playback-resumed" }
@@ -63,7 +63,13 @@ export type PlayerPlaybackEvent =
   | { type: "player-closing" }
   | { type: "player-closed" }
   | { type: "segment-skipped"; kind: PlaybackSkipKind; automatic: boolean }
-  | { type: "track-changed"; trackType: "audio" | "sub"; id: number }
+  | {
+      type: "track-changed";
+      trackType: "audio" | "sub";
+      id: number;
+      language?: string;
+      url?: string;
+    }
   | {
       type: "mpv-in-process-reconnect";
       phase: "started" | "complete" | "failed";

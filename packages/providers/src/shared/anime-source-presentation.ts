@@ -94,20 +94,20 @@ export function animeQualityFields(
   fallbackHeight?: number,
 ): AnimeQualityFields {
   const fromLabel = normalizeQualityLabel(quality);
+  if (typeof fallbackHeight === "number" && Number.isFinite(fallbackHeight) && fallbackHeight > 0) {
+    return {
+      qualityLabel: `${Math.trunc(fallbackHeight)}p`,
+      qualityRank: Math.trunc(fallbackHeight),
+    };
+  }
   if (fromLabel && fromLabel !== "unknown" && fromLabel !== "auto") {
     return {
       qualityLabel: fromLabel,
       qualityRank: qualityRankFromLabel(fromLabel) ?? qualityRankFromLabel(quality) ?? 0,
     };
   }
-  if (typeof fallbackHeight === "number" && fallbackHeight > 0) {
-    return {
-      qualityLabel: `${Math.trunc(fallbackHeight)}p`,
-      qualityRank: Math.trunc(fallbackHeight),
-    };
-  }
   if (fromLabel === "auto") {
-    return { qualityLabel: "auto", qualityRank: qualityRankFromLabel("auto") ?? 1080 };
+    return { qualityLabel: "auto", qualityRank: 0 };
   }
   return { qualityLabel: "auto", qualityRank: 0 };
 }

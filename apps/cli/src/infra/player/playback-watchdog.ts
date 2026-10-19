@@ -1,3 +1,4 @@
+import { hasDecodedVideo } from "./mpv-playback-kernel";
 import type { PlayerStatsSample } from "./mpv-stats";
 import type { PlayerPlaybackEvent } from "./PlayerService";
 
@@ -40,6 +41,9 @@ export function createPlaybackWatchdog(
   let bufferingSince: number | null = null;
   let emittedSlowNetwork = false;
   let lastNetworkSampleAt = 0;
+  let hadDecodedVideo = false;
+  let videoLostSince: number | null = null;
+  let emittedVideoStall = false;
 
   const resetProgressClock = (observedAt: number, positionSeconds: number) => {
     lastPosition = positionSeconds;
@@ -52,10 +56,13 @@ export function createPlaybackWatchdog(
     if (!latest) return;
 
     const now = Date.now();
-    const userPausedOrIdle = Boolean(latest.paused || latest.idleActive || latest.coreIdle);
+    const userPausedOrIdle = Boolean(
+      latest.paused || (latest.idleActive && !latest.pausedForCache),
+    );
 
     if (userPausedOrIdle) {
       pausedOrIdle = true;
+      videoLostSince = null;
       resetProgressClock(now, latest.positionSeconds);
       seekingSince = null;
       emittedSeekStall = false;
@@ -75,6 +82,21 @@ export function createPlaybackWatchdog(
       emittedNetworkReadDead = false;
       bufferingSince = null;
       emittedSlowNetwork = false;
+    }
+
+    if (hasDecodedVideo(latest)) {
+      hadDecodedVideo = true;
+      videoLostSince = null;
+      emittedVideoStall = false;
+    } else if (hadDecodedVideo && !latest.seeking) {
+      videoLostSince ??= now;
+      if (now - videoLostSince >= stallAfterMs && !emittedVideoStall) {
+        emittedVideoStall = true;
+        emit({
+          type: "stream-stalled",
+          secondsWithoutProgress: Math.round((now - videoLostSince) / 1000),
+        });
+      }
     }
 
     if (latest.seeking) {
@@ -198,7 +220,9 @@ export function createPlaybackWatchdog(
         emittedSlowNetwork = false;
       }
 
-      const userPausedOrIdle = Boolean(sample.paused || sample.idleActive || sample.coreIdle);
+      const userPausedOrIdle = Boolean(
+        sample.paused || (sample.idleActive && !sample.pausedForCache),
+      );
       if (userPausedOrIdle) {
         pausedOrIdle = true;
         resetProgressClock(sample.observedAt, sample.positionSeconds);

@@ -56,6 +56,65 @@ describe("playback-watchdog", () => {
     timers = [];
   });
 
+  test("core-idle during network underrun is not a user pause", () => {
+    const events: PlayerPlaybackEvent[] = [];
+    const watchdog = createPlaybackWatchdog((event) => events.push(event), {
+      networkReadDeadAfterMs: 100,
+    });
+    watchdog.observe({
+      source: "ipc",
+      observedAt: 0,
+      positionSeconds: 50,
+      durationSeconds: 600,
+      coreIdle: true,
+      pausedForCache: true,
+      demuxerViaNetwork: true,
+      demuxerCacheUnderrun: true,
+      demuxerRawInputRate: 0,
+    });
+    runTimers();
+    nowMs = 200;
+    runTimers();
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "stream-stalled", stallKind: "network-read-dead" }),
+    );
+    watchdog.stop();
+  });
+
+  test("lost video output stalls even while audio clock advances", () => {
+    const events: PlayerPlaybackEvent[] = [];
+    const watchdog = createPlaybackWatchdog((event) => events.push(event), { stallAfterMs: 100 });
+    watchdog.observe({
+      source: "ipc",
+      observedAt: 0,
+      positionSeconds: 50,
+      durationSeconds: 600,
+      voConfigured: true,
+      videoOutParams: { w: 1920, h: 1080 },
+    });
+    runTimers();
+    watchdog.observe({
+      source: "ipc",
+      observedAt: 10,
+      positionSeconds: 51,
+      durationSeconds: 600,
+      voConfigured: false,
+    });
+    nowMs = 10;
+    runTimers();
+    watchdog.observe({
+      source: "ipc",
+      observedAt: 200,
+      positionSeconds: 52,
+      durationSeconds: 600,
+      voConfigured: false,
+    });
+    nowMs = 200;
+    runTimers();
+    expect(events).toContainEqual(expect.objectContaining({ type: "stream-stalled" }));
+    watchdog.stop();
+  });
+
   test("does not emit stream-stalled after long user pause then resume", () => {
     const events: PlayerPlaybackEvent[] = [];
     const watchdog = createPlaybackWatchdog(

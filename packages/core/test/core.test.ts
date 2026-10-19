@@ -1887,3 +1887,81 @@ test("hedged fallback records every in-flight candidate as aborted on cancel", a
     ["slow-b", true],
   ] as never);
 });
+
+test("balanced hedges retain an already-running validated HD source within a bounded grace", async () => {
+  const originalSet = globalThis.setTimeout;
+  const originalClear = globalThis.clearTimeout;
+  const timers = new Map<number, { callback: () => void; ms: number }>();
+  const completions = new Map<string, () => void>();
+  let nextId = 0;
+  globalThis.setTimeout = ((callback: () => void, ms: number) => {
+    const id = ++nextId;
+    timers.set(id, { callback, ms });
+    return id;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((id: number) => {
+    timers.delete(Number(id));
+  }) as unknown as typeof clearTimeout;
+  const flush = async () => {
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  };
+  const module = (id: string, height?: number): CoreProviderModule => ({
+    providerId: id as never,
+    manifest: defineProviderManifest({ ...vidkingManifest, id, displayName: id }),
+    async resolve(input, context) {
+      await new Promise<void>((resolve) => completions.set(id, resolve));
+      return {
+        status: "resolved",
+        providerId: id,
+        selectedStreamId: id,
+        streamReachabilityVerified: Boolean(height),
+        streams: [
+          {
+            id,
+            providerId: id,
+            url: `https://cdn.example/${id}.mp4`,
+            protocol: "mp4",
+            height,
+            confidence: 1,
+            cachePolicy: { ttlClass: "stream-manifest", scope: "local", keyParts: [] },
+          },
+        ],
+        subtitles: [],
+        failures: [],
+        trace: {
+          id,
+          title: input.title,
+          startedAt: context.now(),
+          cacheHit: false,
+          steps: [],
+          failures: [],
+        },
+      } as never;
+    },
+  });
+  try {
+    const engine = createProviderEngine({
+      modules: [module("unknown"), module("hd", 1080)],
+      hedgeDelayMs: 5,
+      maxAttempts: 1,
+    });
+    const promise = engine.resolveWithFallback(HEDGE_INPUT, ["unknown", "hd"] as never);
+    await flush();
+    const hedge = [...timers.values()].find((timer) => timer.ms === 5);
+    expect(hedge).toBeDefined();
+    hedge!.callback();
+    await flush();
+    completions.get("unknown")!();
+    await flush();
+    expect([...timers.values()].some((timer) => timer.ms === 1_000)).toBe(true);
+    completions.get("hd")!();
+    await flush();
+    const result = await promise;
+    expect(result.providerId).toBe("hd");
+    expect(result.attempts).toHaveLength(2);
+    expect([...timers.values()].some((timer) => timer.ms === 1_000)).toBe(false);
+  } finally {
+    globalThis.setTimeout = originalSet;
+    globalThis.clearTimeout = originalClear;
+  }
+});

@@ -169,7 +169,7 @@ function linksToCandidates(
   const archetype = formatAnimeSourceArchetype({ audio: input.audioMode, detail: flavorLabel });
 
   for (const link of links) {
-    const quality = animeQualityFields(link.quality);
+    const quality = animeQualityFields(link.quality, link.height);
     const streamId = `stream:${HIANIME_PROVIDER_ID}:${Bun.hash(link.url).toString(36)}`;
     const variantId = `variant:${HIANIME_PROVIDER_ID}:${sourceId}:${quality.qualityLabel}`;
     const origin = (() => {
@@ -195,6 +195,8 @@ function linksToCandidates(
       },
       qualityLabel: quality.qualityLabel,
       qualityRank: quality.qualityRank,
+      height: link.height,
+      bitrate: link.bitrate,
       presentation: input.audioMode,
       audioLanguages,
       subtitleDelivery: input.hasExternalSubtitles ? "external" : undefined,

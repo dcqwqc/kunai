@@ -6,7 +6,7 @@ import type { StartupPriority } from "@kunai/types";
 const TOTAL_RESOLVE_DEADLINE_MS: Record<StartupPriority, number> = {
   fast: 15_000,
   balanced: 45_000,
-  "quality-first": 120_000,
+  "quality-first": 60_000,
 };
 
 export function resolveProviderAttemptTimeoutMs(startupPriority: StartupPriority): number {

@@ -164,7 +164,7 @@ async function resolveHostAddresses(host: string): Promise<string[]> {
 }
 
 export type ProbeFetchOutcome =
-  | { readonly kind: "response"; readonly response: Response }
+  | { readonly kind: "response"; readonly response: Response; readonly finalUrl?: string }
   | { readonly kind: "blocked"; readonly reason: string }
   | { readonly kind: "timeout" };
 
@@ -223,7 +223,7 @@ async function fetchProbeTarget(options: {
         continue;
       }
     }
-    return { kind: "response", response };
+    return { kind: "response", response, ...(target !== options.url ? { finalUrl: target } : {}) };
   }
 }
 

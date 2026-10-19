@@ -1,4 +1,6 @@
+import { compareStreamQuality } from "@kunai/core";
 import type { ProviderSelectionDecision, StartupPriority, StreamCandidate } from "@kunai/types";
+export { compareStreamQuality } from "@kunai/core";
 
 export const BALANCED_QUALITY_WAIT_BUDGET_MS = 1_000;
 export const QUALITY_FIRST_WAIT_BUDGET_MS = 4_000;
@@ -44,13 +46,19 @@ export function selectReadyStream(
   },
 ): { readonly selected: StreamCandidate; readonly decision: ProviderSelectionDecision } {
   const startupPriority = input.startupPriority ?? "balanced";
-  const explicit = streams.find((stream) =>
-    input.preferredStreamId
-      ? stream.id === input.preferredStreamId
-      : input.preferredSourceId
-        ? stream.sourceId === input.preferredSourceId
-        : false,
-  );
+  const normalizedQualityPreference = normalizeQualityPreferenceToken(input.qualityPreference);
+  const sourceStreams = [...streams]
+    .filter((row) => row.sourceId === input.preferredSourceId)
+    .sort(compareStreamQuality);
+  const explicit = input.preferredStreamId
+    ? streams.find((row) => row.id === input.preferredStreamId)
+    : input.preferredSourceId
+      ? ((normalizedQualityPreference
+          ? sourceStreams.find((row) =>
+              streamMatchesQualityPreference(row, normalizedQualityPreference),
+            )
+          : undefined) ?? sourceStreams[0])
+      : undefined;
   const favoritePriority = new Map(
     (input.favoriteSourceNames ?? []).map((sourceName, index) => [sourceName, index]),
   );
@@ -72,13 +80,10 @@ export function selectReadyStream(
                 normalizeSourceName(right.serverName ?? right.flavorLabel ?? right.sourceId ?? ""),
               ) ?? Number.MAX_SAFE_INTEGER;
             if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-            return (right.qualityRank ?? 0) - (left.qualityRank ?? 0);
+            return compareStreamQuality(left, right);
           })[0]
       : undefined;
-  const normalizedQualityPreference = normalizeQualityPreferenceToken(input.qualityPreference);
-  const ordered = [...streams].sort(
-    (left, right) => (right.qualityRank ?? 0) - (left.qualityRank ?? 0),
-  );
+  const ordered = [...streams].sort((left, right) => compareStreamQuality(left, right));
   // Prefer the *best* matching quality (not the first includes hit), so "1080"
   // still wins when labels are "1080p" / "1080P" / "ORG 1080".
   const preferredQuality =

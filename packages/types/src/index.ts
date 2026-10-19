@@ -269,6 +269,9 @@ export interface EpisodeIdentity {
 }
 
 export interface StreamCandidate {
+  /** Source/manifest evidence, never inferred from a provider display name. */
+  readonly height?: number;
+  readonly bitrate?: number;
   readonly id: string;
   readonly providerId: ProviderId;
   readonly sourceId?: string;

@@ -90,6 +90,8 @@ export type HianimeShow = {
 };
 
 export type HianimeStreamLink = {
+  readonly height?: number;
+  readonly bitrate?: number;
   readonly url: string;
   readonly quality: string;
   readonly qualityRank: number;
@@ -579,6 +581,8 @@ export async function resolveHianimeEpisodeStreams({
       url: variant.url,
       quality: variant.qualityLabel,
       qualityRank: variant.qualityRank,
+      height: variant.height,
+      bitrate: variant.bandwidth,
       referer: embedReferer,
     }));
     if (links.length === 0) {

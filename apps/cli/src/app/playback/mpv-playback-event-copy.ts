@@ -84,6 +84,11 @@ export function describeMpvPlayerEvent(event: PlayerPlaybackEvent): MpvPlaybackF
     case "player-ready":
       return { detail: "Player controls ready" };
     case "playback-started":
+      if (event.readiness === "backend-unverified")
+        return {
+          detail: "Playback started · video output unverified",
+          note: "Player backend does not expose decoded-video evidence",
+        };
       return { detail: "Playing" };
     case "stream-stalled": {
       const dead = event.stallKind === "network-read-dead";

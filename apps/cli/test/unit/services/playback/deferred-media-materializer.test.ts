@@ -42,7 +42,7 @@ describe("deferred media materializer", () => {
     const stream: StreamInfo = {
       url: locator,
       deferredLocator: locator,
-      headers: {},
+      headers: { Referer: "https://allmanga.example/", Cookie: "media-token=test" },
       title: "Ak Test",
       timestamp: Date.now(),
     };
@@ -51,6 +51,7 @@ describe("deferred media materializer", () => {
     cleanup.push(materialized.cleanup);
 
     expect(materialized.stream.url.endsWith(".mpd")).toBe(true);
+    expect(materialized.stream.headers).toEqual(stream.headers);
     expect(materialized.stream.deferredLocator).toBe(locator);
     expect(existsSync(materialized.stream.url)).toBe(true);
 

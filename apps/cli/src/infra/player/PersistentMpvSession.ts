@@ -42,6 +42,7 @@ import {
   newMpvIpcSessionId,
   shouldUnlinkUnixSocket,
 } from "./mpv-ipc-endpoint";
+import { hasPlayableOutput } from "./mpv-playback-kernel";
 import { shouldEmitPlaybackProgress } from "./mpv-playback-kernel";
 import type { MpvUrlKind } from "./mpv-playback-url";
 import type { MpvRuntimeOptions } from "./mpv-runtime-options";
@@ -212,6 +213,7 @@ export class PersistentMpvSession {
   private currentPositionSeconds = 0;
   private skippedSegments = new Set<string>();
   private currentOptions: PlayerCycleOptions;
+  private currentPlaybackPromise: Promise<PlaybackResult> | null = null;
   private watchdog: PlaybackWatchdog | null = null;
   /**
    * One playback cycle inside this process. Every deferred continuation captures
@@ -547,10 +549,12 @@ export class PersistentMpvSession {
   }
 
   waitForCurrentPlayback(): Promise<PlaybackResult> {
-    if (!this.activeCycle) {
-      throw new Error("Persistent MPV session has no active playback");
+    if (!this.currentPlaybackPromise) {
+      throw new Error("Persistent MPV session has no playback cycle");
     }
-    return this.activeCycle.promise;
+    // A fast demux/HTTP error can settle before create() returns. Keep that
+    // cycle promise available so its actual failure reaches source recovery.
+    return this.currentPlaybackPromise;
   }
 
   async close(): Promise<void> {
@@ -756,6 +760,7 @@ export class PersistentMpvSession {
             this.pendingFileLoad = null;
             if (!this.isGenerationCurrent(pending.generation)) return;
             this.loadedFileGeneration = pending.generation;
+            void this.refreshOutputEvidence(pending.generation);
 
             void this.ipcSession?.send(["set_property", "user-data/kunai-loading", ""], 300);
             const reconnect = this.pendingInProcessReconnect;
@@ -850,6 +855,7 @@ export class PersistentMpvSession {
       acceptPlaybackProperties: cycleOptions.acceptPlaybackProperties ?? true,
     };
     this.activeCycle = cycle;
+    this.currentPlaybackPromise = promise;
     this.currentOptions = options;
     return cycle;
   }
@@ -1112,8 +1118,37 @@ export class PersistentMpvSession {
     return this.currentOptions;
   }
 
+  /** Observations may arrive while a replacement is gated, or stay unchanged
+   * between files. Query current output facts after file-loaded rather than
+   * accepting stale clock/track data from the prior source. */
+  private async refreshOutputEvidence(generation: PlaybackGeneration): Promise<void> {
+    const ipc = this.ipcSession;
+    if (!ipc) return;
+    const names = [
+      "mpv-version",
+      "vo-configured",
+      "video-out-params",
+      "track-list",
+      "filename",
+    ] as const;
+    const results = await Promise.all(names.map((name) => ipc.send(["get_property", name], 1_000)));
+    if (!this.isGenerationCurrent(generation) || this.ipcSession !== ipc) return;
+    for (let index = 0; index < names.length; index++) {
+      const result = results[index];
+      const name = names[index];
+      if (name && result?.ok && Object.hasOwn(result.response, "data")) {
+        this.propertyRouter.handlePropertyUpdate({
+          name,
+          value: result.response.data,
+          observedAt: Date.now(),
+        });
+      }
+    }
+  }
+
   private maybeEmitPlaybackProgress(cycle: PlayerCycleState, observedAt: number): void {
     const sample = cycle.stats.latestIpcSample;
+    if (!hasPlayableOutput(sample)) return;
     if (
       !shouldEmitPlaybackProgress(
         cycle,
@@ -1568,7 +1603,10 @@ export class PersistentMpvSession {
     // is a hard source failure: retrying the identical URL cannot repair it and
     // only delays the normal source/provider failover path. Ordinary network
     // errors still get the bounded same-URL reconnect below.
-    const hardSourceDenied = fileError === "kunai_access_denied";
+    const hardSourceDenied =
+      fileError === "kunai_access_denied" ||
+      fileError === "loading_failed" ||
+      Boolean(fileError && /unrecognized|unsupported|decoder|codec/i.test(fileError));
     const shouldTryReconnect =
       !hardSourceDenied &&
       this.mpvInProcessStreamReconnectEnabled &&

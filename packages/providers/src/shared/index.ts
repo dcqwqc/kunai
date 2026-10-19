@@ -17,3 +17,5 @@ export * from "./stream-reachability";
 export * from "./stream-health";
 export * from "./source-inventory";
 export * from "./subtitle-helpers";
+
+export { compareStreamQuality } from "./startup-selection";

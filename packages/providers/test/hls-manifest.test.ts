@@ -74,3 +74,19 @@ describe("hls-manifest helpers", () => {
     ).toBe(false);
   });
 });
+
+test("local HLS retains remote initialization, key, audio and subtitle references", () => {
+  const text = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="keys/a.key"
+#EXT-X-MAP:URI="/init.mp4",BYTERANGE="100@0"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub",URI="../sub/en.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",URI="//audio.example/en.m3u8"
+#EXTINF:3,
+relative.m4s`;
+  const output = absolutizeHostRootHlsManifest(text, "https://cdn.example/title/index.m3u8");
+  expect(output).toContain('URI="https://cdn.example/title/keys/a.key"');
+  expect(output).toContain('URI="https://cdn.example/init.mp4"');
+  expect(output).toContain('URI="https://cdn.example/sub/en.m3u8"');
+  expect(output).toContain('URI="https://audio.example/en.m3u8"');
+  expect(output).toContain("https://cdn.example/title/relative.m4s");
+});

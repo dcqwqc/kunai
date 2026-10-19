@@ -75,7 +75,7 @@ export const DEFAULT_CONFIG: KitsuneConfig = {
   // Revision 3 leads with VidLink + HiAnime and covers both lanes.
   providerDefaultsRevision: 3,
   youtubeProviderPriority: ["youtube"],
-  youtubeLanguageProfile: { audio: "original", subtitle: "en", quality: "1080p" },
+  youtubeLanguageProfile: { audio: "original", subtitle: "en", quality: "best" },
   youtubeMetadata: { extractorArgs: DEFAULT_YOUTUBE_EXTRACTOR_ARGS },
   wyzieApiKey: "",
   animeLanguageProfile: { audio: "original", subtitle: "en", quality: "best" },
@@ -129,6 +129,8 @@ export const DEFAULT_CONFIG: KitsuneConfig = {
   autoCleanupWatched: false,
   recoveryMode: "guided",
   startupPriority: "balanced",
+  automaticStreamFailover: true,
+  prepareBackupStream: true,
   offlineArtworkCacheEnabled: true,
   offlineFreeSpaceReserveBytes: DEFAULT_OFFLINE_FREE_SPACE_RESERVE_BYTES,
   offlineUnknownEpisodeEstimateBytes: DEFAULT_UNKNOWN_EPISODE_ESTIMATE_BYTES,

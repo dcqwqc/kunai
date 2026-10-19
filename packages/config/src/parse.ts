@@ -15,6 +15,9 @@ export function parseKitsuneConfigPartial(value: unknown): Partial<KitsuneConfig
   // not poison every other key. Validate it apart from the passthrough rest.
   const { providerRelay, ...rest } = value as Record<string, unknown>;
   const result: Record<string, unknown> = { ...rest };
+  for (const key of ["automaticStreamFailover", "prepareBackupStream"]) {
+    if (typeof result[key] !== "boolean") delete result[key];
+  }
   if (providerRelay !== undefined) {
     const parsed = kitsuneProviderRelayConfigSchema.safeParse(providerRelay);
     if (parsed.success) result.providerRelay = parsed.data;

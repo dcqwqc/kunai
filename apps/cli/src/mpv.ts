@@ -14,6 +14,7 @@ import {
   newMpvIpcSessionId,
   shouldUnlinkUnixSocket,
 } from "@/infra/player/mpv-ipc-endpoint";
+import { hasPlayableOutput, playbackOutputReadiness } from "@/infra/player/mpv-playback-kernel";
 import {
   createPlaybackProgressThrottleState,
   shouldEmitPlaybackProgress,
@@ -202,10 +203,14 @@ async function launchMpvInner(
   const notifyPlaybackStarted = () => {
     if (playbackStartedNotified) return;
     playbackStartedNotified = true;
-    emitPlaybackEvent({ type: "playback-started" });
+    emitPlaybackEvent({
+      type: "playback-started",
+      readiness: playbackOutputReadiness(stats.latestIpcSample),
+    });
   };
   const maybeEmitPlaybackProgress = (observedAt: number) => {
     const sample = stats.latestIpcSample;
+    if (!hasPlayableOutput(sample)) return;
     if (
       !shouldEmitPlaybackProgress(
         playbackProgressThrottle,
@@ -340,7 +345,7 @@ async function launchMpvInner(
         }
         if ((name === "time-pos" || name === "playback-time") && typeof value === "number") {
           currentPositionSeconds = value;
-          if (value > 0) {
+          if (value > 0 && hasPlayableOutput(stats.latestIpcSample)) {
             notifyPlaybackStarted();
           }
           maybeEmitPlaybackProgress(observedAt);

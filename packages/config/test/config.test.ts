@@ -126,3 +126,19 @@ test("non-object input still degrades to an empty partial", () => {
   expect(parseKitsuneConfigPartial("config")).toEqual({});
   expect(parseKitsuneConfigPartial([1, 2])).toEqual({});
 });
+
+test("playback reliability defaults have real boolean overrides without changing quality pins", () => {
+  expect(DEFAULT_CONFIG.automaticStreamFailover).toBe(true);
+  expect(DEFAULT_CONFIG.prepareBackupStream).toBe(true);
+  expect(DEFAULT_CONFIG.youtubeLanguageProfile.quality).toBe("best");
+  expect(
+    parseKitsuneConfigPartial({ automaticStreamFailover: false, prepareBackupStream: false }),
+  ).toEqual({ automaticStreamFailover: false, prepareBackupStream: false });
+  expect(
+    parseKitsuneConfigPartial({ automaticStreamFailover: "false", prepareBackupStream: null }),
+  ).toEqual({});
+  const pinned = mergeKitsuneConfig(DEFAULT_CONFIG, {
+    movieLanguageProfile: { audio: "de", subtitle: "none", quality: "720p" },
+  });
+  expect(pinned.movieLanguageProfile).toEqual({ audio: "de", subtitle: "none", quality: "720p" });
+});

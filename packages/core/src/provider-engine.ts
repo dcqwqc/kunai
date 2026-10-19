@@ -27,6 +27,7 @@ import {
   ProviderResolveAbortError,
   ProviderResolveFailureError,
 } from "./resolver";
+import { compareStreamQuality } from "./stream-quality";
 
 export function resolveProviderId(providerId: ProviderId): ProviderId {
   return resolveProviderIdAlias(providerId);
@@ -647,8 +648,60 @@ export class ProviderEngine {
             index: outcome.index,
             attempt: { providerId, result: outcome.result },
           });
+          let winner = outcome;
+          // Only compare already-running hedges. A brief grace window can retain
+          // a validated HD source without another provider fan-out or a full deadline wait.
+          const selected = (result: ProviderResolveResult) =>
+            result.streams.find((row) => row.id === result.selectedStreamId);
+          const explicitQuality =
+            input.qualityPreference && !/^(best|auto|max)$/i.test(input.qualityPreference);
+          if (
+            (input.startupPriority ?? "balanced") === "balanced" &&
+            !input.preferredSourceId &&
+            !input.preferredStreamId &&
+            !input.favoriteSourceNames?.length &&
+            !explicitQuality &&
+            inFlight.size > 0
+          ) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const deadline = new Promise<null>((resolve) => {
+              timer = setTimeout(() => resolve(null), 1_000);
+            });
+            try {
+              while (inFlight.size > 0) {
+                if (signal?.aborted) break;
+                const contenders: Array<Promise<Settlement | null>> = [...inFlight.values()].map(
+                  (entry) => entry.settled,
+                );
+                const contender = await Promise.race([...contenders, deadline]);
+                if (!contender) break;
+                inFlight.delete(contender.index);
+                await recordSettledAttempts([Promise.resolve(contender)]);
+                if (
+                  contender.kind !== "success" ||
+                  contender.result.streamReachabilityVerified !== true
+                )
+                  continue;
+                const currentStream = selected(winner.result);
+                const nextStream = selected(contender.result);
+                if (
+                  nextStream &&
+                  (!currentStream || compareStreamQuality(currentStream, nextStream) > 0)
+                )
+                  winner = contender;
+              }
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          }
           await recordSettledAttempts(abortAll(new ProviderResolveAbortError()));
-          return { result: outcome.result, providerId, attempts: orderedAttempts() };
+          if (signal?.aborted)
+            return { result: null, providerId: null, attempts: orderedAttempts() };
+          return {
+            result: winner.result,
+            providerId: winner.providerId,
+            attempts: orderedAttempts(),
+          };
         }
 
         indexedAttempts.push({

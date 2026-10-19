@@ -360,6 +360,10 @@ describe("PersistentMpvSession fake IPC lifecycle harness", () => {
     });
 
     harness.callbacks().onFileLoaded?.({ observedAt: 1 });
+    harness.callbacks().onPropertyUpdate({ name: "vo-configured", value: true, observedAt: 2 });
+    harness
+      .callbacks()
+      .onPropertyUpdate({ name: "video-out-params", value: { w: 1920, h: 1080 }, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "duration", value: 600, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "time-pos", value: 120, observedAt: 3 });
     const playbackResult = session.waitForCurrentPlayback();
@@ -371,6 +375,8 @@ describe("PersistentMpvSession fake IPC lifecycle harness", () => {
     expect(result.endReason).toBe("eof");
     expect(result.watchedSeconds).toBe(600);
     expect(result.duration).toBe(600);
+    // Early end-file must remain awaitable even after activeCycle has cleared.
+    expect(await session.waitForCurrentPlayback()).toEqual(result);
   });
 
   test("ignores playback property flood before episode-transition ready work but keeps subtitle cleanup cache", async () => {
@@ -790,6 +796,10 @@ describe("PersistentMpvSession fake IPC lifecycle harness", () => {
     });
 
     harness.callbacks().onFileLoaded?.({ observedAt: 1 });
+    harness.callbacks().onPropertyUpdate({ name: "vo-configured", value: true, observedAt: 2 });
+    harness
+      .callbacks()
+      .onPropertyUpdate({ name: "video-out-params", value: { w: 1920, h: 1080 }, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "duration", value: 600, observedAt: 2 });
     harness
       .callbacks()
@@ -833,6 +843,10 @@ describe("PersistentMpvSession fake IPC lifecycle harness", () => {
       runtime: harness.runtime,
     });
     harness.callbacks().onFileLoaded?.({ observedAt: 1 });
+    harness.callbacks().onPropertyUpdate({ name: "vo-configured", value: true, observedAt: 2 });
+    harness
+      .callbacks()
+      .onPropertyUpdate({ name: "video-out-params", value: { w: 1920, h: 1080 }, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "duration", value: 600, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "time-pos", value: 100, observedAt: 3 });
     harness
@@ -897,6 +911,10 @@ describe("PersistentMpvSession fake IPC lifecycle harness", () => {
       runtime: harness.runtime,
     });
     harness.callbacks().onFileLoaded?.({ observedAt: 1 });
+    harness.callbacks().onPropertyUpdate({ name: "vo-configured", value: true, observedAt: 2 });
+    harness
+      .callbacks()
+      .onPropertyUpdate({ name: "video-out-params", value: { w: 1920, h: 1080 }, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "duration", value: 600, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "time-pos", value: 100, observedAt: 3 });
     harness
@@ -956,6 +974,10 @@ describe("PersistentMpvSession fake IPC lifecycle harness", () => {
       runtime: harness.runtime,
     });
     harness.callbacks().onFileLoaded?.({ observedAt: 1 });
+    harness.callbacks().onPropertyUpdate({ name: "vo-configured", value: true, observedAt: 2 });
+    harness
+      .callbacks()
+      .onPropertyUpdate({ name: "video-out-params", value: { w: 1920, h: 1080 }, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "duration", value: 600, observedAt: 2 });
     harness.callbacks().onPropertyUpdate({ name: "time-pos", value: 100, observedAt: 3 });
     harness

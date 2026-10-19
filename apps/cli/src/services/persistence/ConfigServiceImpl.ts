@@ -545,6 +545,14 @@ export class ConfigServiceImpl implements ConfigService {
     return this.config.continueSourcePreference;
   }
 
+  get automaticStreamFailover(): boolean {
+    return this.config.automaticStreamFailover;
+  }
+
+  get prepareBackupStream(): boolean {
+    return this.config.prepareBackupStream;
+  }
+
   get startupPriority(): StartupPriority {
     return this.config.startupPriority;
   }
