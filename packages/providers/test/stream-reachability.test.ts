@@ -5,6 +5,7 @@ import {
   isStreamReachableForPlaybackPreflight,
   isStreamReachableForResolve,
   probeStreamReachability,
+  probeHlsEarlyPlaybackWindow,
   shouldAbortPlaybackForPreflight,
 } from "../src/shared/stream-reachability";
 
@@ -19,6 +20,50 @@ function response(
 function mediaBytes(size = HLS_SEGMENT_PROBE_MIN_BYTES): Uint8Array {
   return new Uint8Array(size).fill(0xab);
 }
+
+describe("HLS opening-window validation", () => {
+  test("rejects HTTP 403 at segment seven even after first segment succeeds", async () => {
+    const checked: string[] = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      checked.push(url);
+      if (url.endsWith("movie.m3u8")) {
+        const body = [
+          "#EXTM3U",
+          ...Array.from({ length: 12 }, (_, i) => "#EXTINF:4,\nseg-" + (i + 1) + ".m4s"),
+        ].join("\n");
+        return response(200, body);
+      }
+      expect(init.headers).toMatchObject({
+        Range: "bytes=0-" + (HLS_SEGMENT_PROBE_MIN_BYTES - 1),
+      });
+      return url.endsWith("seg-7.m4s") ? response(403) : response(206, mediaBytes());
+    };
+    expect(
+      await probeHlsEarlyPlaybackWindow({
+        url: "https://cdn.example/movie.m3u8",
+        fetchImpl,
+        timeoutMs: 1500,
+      }),
+    ).toEqual({
+      status: "unreachable",
+      reason: "HLS segment unreachable: HTTP 403",
+      definitive: true,
+    });
+    expect(checked).toContain("https://cdn.example/seg-7.m4s");
+  });
+
+  test("does not reject malformed optional windows without firm denial", async () => {
+    const fetchImpl = async (url: string) =>
+      url.endsWith(".m3u8") ? response(200, "{}") : response(206, mediaBytes());
+    expect(
+      await probeHlsEarlyPlaybackWindow({
+        url: "https://cdn.example/movie.m3u8",
+        fetchImpl,
+        timeoutMs: 500,
+      }),
+    ).toEqual({ status: "timeout" });
+  });
+});
 
 describe("stream reachability", () => {
   test("HLS media playlists probe first media segment after playlist fetch", async () => {

@@ -260,6 +260,83 @@ export function fetchGuardedStreamTarget(options: {
 }
 
 /** Quick manifest/segment probe used before accepting a provider candidate or handing off to mpv. */
+/**
+ * Quality-first HLS preflight for fragile movie-CDN mirrors.
+ *
+ * The regular reachability gate verifies only the first HLS segment, which
+ * misses playlists whose sixth or seventh fragment is already HTTP 403.
+ * Inspect a bounded initial playback window to catch an early definitive
+ * rejection *before* opening the fullscreen video player.
+ *
+ * A slow response is inconclusive, never proof that the source is dead.
+ */
+export async function probeHlsEarlyPlaybackWindow(
+  input: ProbeStreamReachabilityInput,
+): Promise<StreamReachabilityProbeResult> {
+  if (!isHlsPlaylistUrl(input.url)) return { status: "timeout" };
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const resolveNames = input.fetchImpl === undefined;
+  const deadline = Date.now() + (input.timeoutMs ?? 4_000);
+  const remaining = () => Math.max(100, deadline - Date.now());
+  const headers = input.headers ?? {};
+  const first = await fetchPlaylistText(
+    fetchImpl,
+    input.url,
+    headers,
+    remaining,
+    input.signal,
+    resolveNames,
+  );
+  // Failure to inspect the extra sample window cannot override the regular gate.
+  if (first.status !== "ok" || !first.text.startsWith("#EXTM3U")) return { status: "timeout" };
+  let mediaUrl = input.url;
+  let mediaText = first.text;
+  if (isHlsMasterPlaylist(first.text)) {
+    const variant = parseFirstHlsVariantPath(first.text);
+    if (!variant) return { status: "timeout" };
+    mediaUrl = resolveHlsSegmentUrl(input.url, variant);
+    const media = await fetchPlaylistText(
+      fetchImpl,
+      mediaUrl,
+      headers,
+      remaining,
+      input.signal,
+      resolveNames,
+    );
+    if (media.status !== "ok") return { status: "timeout" };
+    mediaText = media.text;
+  }
+  const segmentPaths = mediaText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => Boolean(line) && !line.startsWith("#"));
+  if (segmentPaths.length < 2) return { status: "timeout" };
+  // The first fragment is checked by the normal gate. Include fragments 6–8:
+  // Pulse/Kairo's Miami CDN returned 206 for fragments 1–6 but 403 at 7.
+  const indexes = [1, 3, 5, 6, 7].filter((i) => i < segmentPaths.length);
+  const results = await Promise.all(
+    indexes.map(async (index) => {
+      const path = segmentPaths[index];
+      if (!path) return { status: "timeout" } as StreamReachabilityProbeResult;
+      return probeHlsMediaSegment(
+        fetchImpl,
+        resolveHlsSegmentUrl(mediaUrl, path),
+        headers,
+        remaining,
+        input.signal,
+        resolveNames,
+      );
+    }),
+  );
+  const rejected = results.find((result) => result.status === "unreachable" && result.definitive);
+  return (
+    rejected ??
+    (results.every((result) => result.status === "reachable")
+      ? { status: "reachable" }
+      : { status: "timeout" })
+  );
+}
+
 export async function probeStreamReachability(
   input: ProbeStreamReachabilityInput,
 ): Promise<StreamReachabilityProbeResult> {

@@ -49,6 +49,7 @@ import {
   streamPresentationFields,
 } from "../shared/source-inventory";
 import { selectReadyStream } from "../shared/startup-selection";
+import { probeHlsEarlyPlaybackWindow } from "../shared/stream-reachability";
 import { inferSubtitleFormat, normalizeIsoLanguageCode } from "../shared/subtitle-helpers";
 import { movyManifest, MOVY_PROVIDER_ID } from "./manifest";
 import { decryptMovyPayload, MovyDecryptError } from "./streamcrypto";
@@ -293,6 +294,7 @@ async function resolveMovyLaneCandidate({
   tmdbId,
   signal,
   gateTimeoutMs,
+  useDeepPlaybackProbe = false,
 }: {
   readonly candidate: ProviderCycleCandidate;
   readonly lane: MovyLane;
@@ -302,6 +304,7 @@ async function resolveMovyLaneCandidate({
   readonly tmdbId: number;
   readonly signal?: AbortSignal;
   readonly gateTimeoutMs: number;
+  readonly useDeepPlaybackProbe?: boolean;
 }): Promise<MovyResolvedCandidate> {
   const sourceId = candidate.sourceId ?? providerInventorySourceId(MOVY_PROVIDER_ID, lane);
   const displayLabel = `Movy ${lane}`;
@@ -427,6 +430,27 @@ async function resolveMovyLaneCandidate({
       // durable evidence about that lane's endpoints rather than our network.
       endpointScoped: true,
     });
+  }
+  // The first segment can load while an early fragment is forbidden.
+  // Sample the opening HLS window on quality-first movie playback and reject
+  // a lane only if it demonstrates a definitive HTTP denial.
+  if (useDeepPlaybackProbe && selection.stream?.protocol === "hls") {
+    const windowProbe = await probeHlsEarlyPlaybackWindow({
+      url: selection.stream.url ?? "",
+      headers: selection.stream.headers,
+      fetchImpl: context.fetch?.fetch.bind(context.fetch),
+      signal,
+      timeoutMs: Math.max(2_500, gateTimeoutMs),
+    });
+    if (windowProbe.status === "unreachable" && windowProbe.definitive) {
+      throw createProviderCycleFailureError(candidate, {
+        failureClass: "candidate-blocked",
+        message: `\${displayLabel}: early HLS playback window: \${windowProbe.reason}`,
+        retryable: false,
+        at: context.now(),
+        endpointScoped: true,
+      });
+    }
   }
   // Keep the alternatives, drop the rungs the gate proved dead.
   const gatedStreams = dropRefusedStreams(streams, selection.refusedHosts);
@@ -618,6 +642,8 @@ export async function resolveMovyDirect(
           // socket until TCP timeout.
           signal: candidateContext.signal,
           gateTimeoutMs,
+          useDeepPlaybackProbe:
+            input.startupPriority === "quality-first" && input.mediaKind === "movie",
         });
       } catch (error) {
         // resolveMovyLaneCandidate already classifies its own failures (e.g.
