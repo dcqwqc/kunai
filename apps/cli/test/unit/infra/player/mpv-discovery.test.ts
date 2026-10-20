@@ -9,14 +9,12 @@ function deps(overrides: {
   exists?: (path: string) => boolean;
   platform?: NodeJS.Platform;
   homeDir?: string;
-  preferSystemMpv?: boolean;
 }) {
   return {
     which: overrides.which ?? (() => null),
     exists: overrides.exists ?? (() => false),
     platform: overrides.platform ?? "linux",
     homeDir: overrides.homeDir ?? HOME,
-    preferSystemMpv: overrides.preferSystemMpv ?? false,
   };
 }
 
@@ -69,18 +67,12 @@ describe("discoverMpvInvocation", () => {
   });
 });
 
-test("uses native system mpv only for an explicitly requested compatibility fallback", () => {
-  const options = deps({
-    which: (command) => (command === "mpv" ? "/home/tester/.local/bin/mpv" : null),
-    exists: (path) => path === "/usr/bin/mpv",
-    preferSystemMpv: true,
-  });
-  expect(discoverMpvInvocation(options)).toEqual({
-    argv: ["/usr/bin/mpv"],
-    via: "path",
-  });
-  expect(discoverMpvInvocation({ ...options, preferSystemMpv: false })).toEqual({
-    argv: ["mpv"],
-    via: "path",
-  });
+test("honors configured Showtime PATH even when native system mpv is installed", () => {
+  const selected = discoverMpvInvocation(
+    deps({
+      which: (command) => (command === "mpv" ? "/home/tester/.local/bin/mpv" : null),
+      exists: (path) => path === "/usr/bin/mpv",
+    }),
+  );
+  expect(selected).toEqual({ argv: ["mpv"], via: "path" });
 });

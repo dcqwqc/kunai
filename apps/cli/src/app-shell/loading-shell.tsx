@@ -837,10 +837,10 @@ export const LoadingShell = React.memo(function LoadingShell({
                 ) : (
                   <Box marginTop={1} flexDirection="column">
                     <Text color={palette.text} bold>
-                      Starting mpv session
+                      Starting video player
                     </Text>
                     <Text color={palette.dim} dimColor>
-                      Waiting for first playback progress from mpv
+                      Waiting for verified playback progress
                     </Text>
                   </Box>
                 )}

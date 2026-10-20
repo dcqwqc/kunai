@@ -21,8 +21,6 @@ export type MpvDiscoveryDeps = {
   readonly exists?: (path: string) => boolean;
   readonly platform?: NodeJS.Platform;
   readonly homeDir?: string;
-  /** Select native mpv instead of a user PATH shim, when explicitly requested. */
-  readonly preferSystemMpv?: boolean;
 };
 
 const FLATPAK_MPV_APP_ID = "io.mpv.Mpv";
@@ -48,11 +46,6 @@ export function discoverMpvInvocation(deps: MpvDiscoveryDeps = {}): MpvInvocatio
   const exists = deps.exists ?? existsSync;
   const platform = deps.platform ?? process.platform;
 
-  // Never redirect an ordinary launch away from a configured player.
-  // Explicit compatibility fallback takes the system binary only if installed.
-  if (deps.preferSystemMpv && platform === "linux" && exists("/usr/bin/mpv")) {
-    return { argv: ["/usr/bin/mpv"], via: "path" };
-  }
   if (which("mpv")) return { argv: ["mpv"], via: "path" };
 
   if (platform === "linux" && which("flatpak")) {
