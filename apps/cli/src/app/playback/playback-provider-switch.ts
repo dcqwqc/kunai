@@ -21,13 +21,28 @@ export function resolveTitleProviderPreference(
   return prefs[titleId] ?? (alternateTitleId ? prefs[alternateTitleId] : undefined);
 }
 
+/** A bare TMDb movie number can coincide with an AniList entry. Keep a
+ * movie's provider pin in its own namespace instead of hijacking the anime pin.
+ * Existing legacy pins remain readable for backwards compatibility. */
+function providerPreferenceKey(
+  title: Pick<TitleInfo, "id" | "type" | "externalIds" | "isAnime">,
+  mode?: ShellMode,
+): string {
+  const canonicalId = resolveTitleHistoryLookupId(title, mode);
+  return mode !== "anime" && title.type === "movie" ? `movie:${canonicalId}` : canonicalId;
+}
+
 export function resolveTitleProviderPreferenceForTitle(
   config: Pick<KitsuneConfig, "titleProviderPreferences">,
   title: Pick<TitleInfo, "id" | "type" | "externalIds" | "isAnime">,
   mode?: ShellMode,
 ): string | undefined {
+  const scopedId = providerPreferenceKey(title, mode);
   const canonicalId = resolveTitleHistoryLookupId(title, mode);
-  return resolveTitleProviderPreference(config, canonicalId, title.id);
+  return (
+    config.titleProviderPreferences[scopedId] ??
+    resolveTitleProviderPreference(config, canonicalId, title.id)
+  );
 }
 
 export async function promoteSoftFallbackAfterEngage(
@@ -59,10 +74,12 @@ export async function persistTitleProviderPreference(
   mode?: ShellMode,
 ): Promise<void> {
   const raw = container.config.getRaw();
-  const canonicalId = resolveTitleHistoryLookupId(title, mode);
+  const canonicalId = providerPreferenceKey(title, mode);
   const nextPrefs = { ...raw.titleProviderPreferences };
 
-  if (canonicalId !== title.id) {
+  // Movie IDs can collide with an existing unscoped anime preference.
+  // Never delete or overwrite such a legacy key when saving a movie pin.
+  if (canonicalId !== title.id && title.type !== "movie") {
     delete nextPrefs[title.id];
   }
 
@@ -79,14 +96,14 @@ export async function clearTitleProviderPreference(
   mode?: ShellMode,
 ): Promise<boolean> {
   const raw = container.config.getRaw();
-  const canonicalId = resolveTitleHistoryLookupId(title, mode);
+  const canonicalId = providerPreferenceKey(title, mode);
   const nextPrefs = { ...raw.titleProviderPreferences };
   let changed = false;
   if (canonicalId in nextPrefs) {
     delete nextPrefs[canonicalId];
     changed = true;
   }
-  if (title.id !== canonicalId && title.id in nextPrefs) {
+  if (title.type !== "movie" && title.id !== canonicalId && title.id in nextPrefs) {
     delete nextPrefs[title.id];
     changed = true;
   }

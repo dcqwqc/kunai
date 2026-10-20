@@ -5,6 +5,7 @@ import {
   applyTitleProviderPreferenceToSession,
   applyUserProviderSwitch,
   clearTitleProviderPreference,
+  persistTitleProviderPreference,
   resolveTitleProviderPreferenceForTitle,
 } from "@/app/playback/playback-provider-switch";
 import { createInitialState, reduceState } from "@/domain/session/SessionState";
@@ -427,4 +428,48 @@ describe("playback provider switch", () => {
     expect(cleared).toBe(true);
     expect(updates.at(-1)?.titleProviderPreferences).toEqual({ "anilist:2": "vidking" });
   });
+});
+
+test("movie provider pins do not overwrite same-number anime pins", async () => {
+  let prefs: Record<string, string> = { "27324": "animegg" };
+  const container = {
+    config: {
+      getRaw: () => ({ titleProviderPreferences: prefs }),
+      update: async (x: { titleProviderPreferences: Record<string, string> }) => {
+        prefs = x.titleProviderPreferences;
+      },
+      save: async () => {},
+    },
+  };
+  await persistTitleProviderPreference(
+    container as never,
+    {
+      id: "27324",
+      type: "movie",
+    },
+    "movy",
+    "series",
+  );
+  expect(prefs).toEqual({ "27324": "animegg", "movie:27324": "movy" });
+  expect(
+    resolveTitleProviderPreferenceForTitle(
+      { titleProviderPreferences: prefs },
+      {
+        id: "27324",
+        type: "movie",
+      },
+      "series",
+    ),
+  ).toBe("movy");
+  expect(
+    resolveTitleProviderPreferenceForTitle(
+      { titleProviderPreferences: prefs },
+      {
+        id: "27324",
+        type: "series",
+        isAnime: true,
+      },
+      "anime",
+    ),
+  ).toBe("animegg");
 });

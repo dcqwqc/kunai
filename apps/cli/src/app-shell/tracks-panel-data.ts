@@ -122,7 +122,14 @@ export async function buildTracksPanelData(
     currentPresentation: currentPresentationFromStream(stream),
   });
 
-  const providers = container.providerRegistry.getAll().map((provider) => provider.metadata);
+  // For movies, show actual compatible providers rather than the entire
+  // registry (including anime-only services that cannot play this title).
+  // Keep linked anime/series cross-lane choices as before.
+  const providers = (
+    state.currentTitle?.type === "movie"
+      ? container.providerRegistry.getCompatible(state.currentTitle, state.mode)
+      : container.providerRegistry.getAll()
+  ).map((provider) => provider.metadata);
   // Same eligibility as the provider picker: a linked title can switch into
   // the other lane's providers, and the playing provider is always listed.
   const tracksLanes = providerPickerLanesForTitle(

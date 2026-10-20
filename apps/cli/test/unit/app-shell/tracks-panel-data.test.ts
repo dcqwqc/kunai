@@ -146,3 +146,34 @@ describe("buildTracksPanelData", () => {
     );
   });
 });
+
+test("movie provider picker hides providers unable to play movies", async () => {
+  const title = { id: "27324", type: "movie" as const, name: "Pulse" };
+  const playable = ["vidlink", "rivestream", "videasy", "vidrock", "movy"].map((id) => ({
+    metadata: { id, name: id, providerLane: "series" as const },
+  }));
+  const animeOnly = {
+    metadata: { id: "animegg", name: "AnimeGG", providerLane: "anime" as const },
+  };
+  const container = {
+    stateManager: {
+      getState: () => ({
+        mode: "series",
+        provider: "movy",
+        currentTitle: title,
+        currentEpisode: { season: 1, episode: 1 },
+      }),
+    },
+    config: { getRaw: () => config },
+    providerRegistry: {
+      getAll: () => [...playable, animeOnly],
+      getCompatible: () => playable,
+      get: (id: string) => [...playable, animeOnly].find((p) => p.metadata.id === id),
+    },
+    titleProviderHealth: { getSwitchSuggestion: () => undefined },
+  } as unknown as Container;
+  const panel = await buildTracksPanelData(null, container);
+  const group = panel.groups.find((g) => g.section === "provider");
+  expect(group?.rows.map((r) => r.value)).not.toContain("animegg");
+  expect(group?.rows.length).toBe(5);
+});

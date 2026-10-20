@@ -95,6 +95,17 @@ export const MOVY_LANES = [
 
 export type MovyLane = (typeof MOVY_LANES)[number];
 
+/**
+ * Quality-first should not waste its bounded startup budget on the first
+ * enumerated mirror. A live Pulse/Kairo (TMDb 27324) decoder comparison on
+ * 2026-10-20 confirmed full A/V at 3840x2076 from Miami and at 1920x1072
+ * from Seattle; Denver 404 and Portland returned 500 during playback.
+ *
+ * This is only a candidate preference, NOT a health guarantee: every lane is
+ * still gated, explicit user pins win, and fallback keeps the full roster.
+ */
+const QUALITY_FIRST_LANES: readonly MovyLane[] = ["miami", "seattle", "paris"];
+
 type MovySourceRow = {
   readonly url?: string;
   readonly quality?: string;
@@ -429,9 +440,12 @@ async function resolveMovyLaneCandidate({
 export function buildMovyCycleCandidates(
   lanes: readonly MovyLane[],
   preferredSourceId?: string,
+  startupPriority?: ProviderResolveInput["startupPriority"],
 ): readonly ProviderCycleCandidate[] {
   return lanes.map((lane, index) => {
     const sourceId = providerInventorySourceId(MOVY_PROVIDER_ID, lane);
+    const qualityRank =
+      startupPriority === "quality-first" ? QUALITY_FIRST_LANES.indexOf(lane) : -1;
     return {
       id: `candidate:${sourceId}`,
       providerId: MOVY_PROVIDER_ID,
@@ -439,7 +453,8 @@ export function buildMovyCycleCandidates(
       serverId: lane,
       label: `Movy ${lane}`,
       nativeLabel: lane,
-      priority: sourceId === preferredSourceId ? index - 10_000 : index,
+      priority:
+        sourceId === preferredSourceId ? -10_000 : qualityRank >= 0 ? -1_000 + qualityRank : index,
       metadata: { lane, sourceHost: "api.wecollege.net" },
     };
   });
@@ -545,7 +560,11 @@ export async function resolveMovyDirect(
     imdbId: input.title.imdbId ?? "",
   };
 
-  const cycleCandidates = buildMovyCycleCandidates(MOVY_LANES, input.preferredSourceId);
+  const cycleCandidates = buildMovyCycleCandidates(
+    MOVY_LANES,
+    input.preferredSourceId,
+    input.startupPriority,
+  );
   const sourceInventorySeeds = buildMovySourceInventoryCandidates(cycleCandidates, cachePolicy);
 
   emitTraceEvent(events, context, {

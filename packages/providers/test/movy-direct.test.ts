@@ -255,6 +255,17 @@ describe("buildMovyCycleCandidates", () => {
     expect(candidates[0]?.serverId).toBe("denver");
   });
 
+  test("quality-first prioritizes decoded HD/4K candidates but preserves manual pins", () => {
+    const quality = buildMovyCycleCandidates(MOVY_LANES, undefined, "quality-first");
+    const ranked = [...quality].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+    expect(ranked.slice(0, 3).map((row) => row.serverId)).toEqual(["miami", "seattle", "paris"]);
+    expect(quality).toHaveLength(MOVY_LANES.length);
+
+    const pinned = buildMovyCycleCandidates(MOVY_LANES, "source:movy:portland", "quality-first");
+    const chosen = [...pinned].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))[0];
+    expect(chosen?.serverId).toBe("portland");
+  });
+
   test("preferred source outranks lane order", () => {
     const candidates = buildMovyCycleCandidates(MOVY_LANES, "source:movy:paris");
     const paris = candidates.find((c) => c.serverId === "paris");
