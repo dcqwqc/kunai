@@ -139,3 +139,37 @@ test("known exhausted sources never become automatic fallback targets", () => {
   } as never;
   expect(listOrderedPlaybackSourceIds(result)).toEqual(["ready"]);
 });
+
+test("untried sources remain eligible after a selected stream fails", () => {
+  const result = {
+    sources: [
+      { id: "movy:denver", status: "failed" },
+      { id: "movy:portland", status: "selected" },
+      { id: "movy:seattle", status: "skipped" },
+      { id: "movy:miami", status: "skipped" },
+      { id: "movy:phoenix", status: "exhausted" },
+    ],
+    streams: [],
+  } as never;
+  const ordered = listOrderedPlaybackSourceIds(result);
+  expect(ordered).toEqual(["movy:portland", "movy:seattle", "movy:miami"]);
+  expect(pickNextCatalogSourceId(ordered, "movy:portland", new Set(["movy:portland"]))).toBe(
+    "movy:seattle",
+  );
+});
+
+test("auto recovery reserves a provider hop instead of cycling an entire dead mirror inventory", () => {
+  const inputs = {
+    sourceIds: ["lane:portland", "lane:seattle", "lane:miami", "lane:austin"],
+    currentSourceId: "lane:miami",
+    triedSourceIds: new Set(["lane:portland", "lane:seattle", "lane:miami"]),
+    hasFallbackProvider: true,
+    failoverAttempts: 3,
+    maxFailoverAttempts: 4,
+  };
+  expect(planStartupFailover(inputs)).toEqual({ kind: "fallback-provider" });
+  expect(planStartupFailover({ ...inputs, hasFallbackProvider: false })).toEqual({
+    kind: "advance-source",
+    sourceId: "lane:austin",
+  });
+});

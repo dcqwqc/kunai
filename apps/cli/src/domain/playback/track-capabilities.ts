@@ -108,21 +108,6 @@ function isSourceSwitchable(state: PlaybackInventoryOptionState): boolean {
 }
 
 /** Servers-style status chip for the source picker detail line. */
-function sourceStatusBadge(state: PlaybackInventoryOptionState): string | undefined {
-  switch (state) {
-    case "selected":
-      return "playing";
-    case "skipped":
-      return "skipped";
-    case "failed":
-      return "failed";
-    case "disabled":
-      return "unavailable";
-    default:
-      return undefined;
-  }
-}
-
 function riskFromState(state: PlaybackInventoryOptionState): TrackCapabilityRisk {
   switch (state) {
     case "failed":
@@ -142,17 +127,6 @@ function detailFromNativeLabels(
 ): string | undefined {
   const extras = nativeLabels.filter((native) => native && native !== label);
   return extras.length > 0 ? extras.join(" · ") : undefined;
-}
-
-function detailFromHintsAndNativeLabels(
-  hints: readonly string[],
-  nativeLabels: readonly string[],
-  label: string,
-): string | undefined {
-  const parts = [...hints, detailFromNativeLabels(nativeLabels, label)].filter(
-    (part): part is string => Boolean(part),
-  );
-  return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 // Flag per audio language so the source/server picker reads like the web Servers
@@ -230,8 +204,20 @@ export function buildTrackCapabilities(
     const primaryAudio = group.audioLanguages?.[0]?.toLowerCase().split("-")[0];
     const audioBadge =
       primaryAudio && primaryAudio !== "en" ? serverAudioBadge(group.audioLanguages) : undefined;
-    const statusBadge = sourceStatusBadge(group.state);
-    const baseDetail = detailFromHintsAndNativeLabels(group.hints, group.nativeLabels, group.label);
+    // Only meaningful track metadata belongs on a source row. The raw
+    // evidence/host/diagnostic fields are available in diagnostics, not repeated
+    // across every mirror of one aggregator.
+    const compactHints = group.hints.filter(
+      (hint) =>
+        !/^(?:selected|playing|failed|skipped|not tried|unavailable)$/i.test(hint) &&
+        !/^host\s+/i.test(hint),
+    );
+    const distinctNative = group.nativeLabels.filter(
+      (label) =>
+        label !== group.label &&
+        !group.label.toLowerCase().includes(label.toLowerCase()) &&
+        !/^(?:[\w-]+\.)+[\w-]+$/.test(label),
+    );
     push({
       section: "source",
       label: group.label,
@@ -239,7 +225,10 @@ export function buildTrackCapabilities(
       selected: group.state === "selected",
       enabled: isSourceSwitchable(group.state),
       reason: group.disabledReason,
-      detail: [statusBadge, audioBadge, baseDetail].filter(Boolean).join("  ·  ") || undefined,
+      detail:
+        [...new Set([audioBadge, ...compactHints, ...distinctNative].filter(Boolean))].join(
+          " · ",
+        ) || undefined,
       risk: riskFromState(group.state),
     });
   }

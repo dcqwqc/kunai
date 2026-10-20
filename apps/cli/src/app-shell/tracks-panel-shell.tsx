@@ -71,19 +71,40 @@ function rowStatusGlyph(
     return { glyph: "✕ ", color: palette.danger };
   }
   if (capability.selected) {
-    return { glyph: "✓ ", color: palette.ok };
+    // Selected is not proof of decoded video, particularly for HTTP-only probes.
+    return { glyph: capability.section === "source" ? "• " : "✓ ", color: palette.ok };
   }
   return null;
 }
 
+/** Display concise facts, not provider-internal traces repeated in every row. */
+export function compactSourceFailureReason(reason: string | undefined): string {
+  if (!reason) return "failed";
+  const status = /\bHTTP\s+(\d{3})\b/i.exec(reason);
+  if (status) return `HTTP ${status[1]}`;
+  if (
+    /HLS master playlist has no variant URI|HLS media playlist has no segment URI/i.test(reason)
+  ) {
+    return "invalid HLS playlist";
+  }
+  if (/playback failed|loading_failed/i.test(reason)) return "playback failed";
+  if (/timed out|timeout/i.test(reason)) return "timed out";
+  if (/access.denied|forbidden/i.test(reason)) return "access denied";
+  return reason.split(" · ")[0]?.slice(0, 65) || "failed";
+}
+
 function rowTag(capability: TrackCapability): string | null {
   if (capability.selected && capability.risk === "failed") {
-    return capability.reason ?? "failed on last try";
+    return capability.section === "source"
+      ? compactSourceFailureReason(capability.reason)
+      : (capability.reason ?? "failed on last try");
   }
   if (capability.risk === "failed") {
-    return capability.reason ?? "failed on last try";
+    return capability.section === "source"
+      ? compactSourceFailureReason(capability.reason)
+      : (capability.reason ?? "failed on last try");
   }
-  if (capability.selected) return "current";
+  if (capability.selected) return capability.section === "source" ? "selected" : "current";
   if (capability.risk === "fallback") return "not tried";
   if (capability.risk === "unavailable") return "unavailable";
   if (capability.enabled) return "available";

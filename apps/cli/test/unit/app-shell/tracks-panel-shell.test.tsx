@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { createInitialTracksNav } from "@/app-shell/tracks-panel-nav";
-import { TracksPanelShell } from "@/app-shell/tracks-panel-shell";
+import { TracksPanelShell, compactSourceFailureReason } from "@/app-shell/tracks-panel-shell";
 import type { TrackCapabilityGroup } from "@/domain/playback/track-capabilities";
 import React from "react";
 
@@ -187,4 +187,12 @@ describe("TracksPanelShell subtitle grid", () => {
     expect(frame.split("\n").length).toBeLessThanOrEqual(16);
     expect(frame).toContain("more");
   });
+});
+
+test("source failure reasons are concise for provider mirrors", () => {
+  expect(compactSourceFailureReason("denver sources failed: HTTP 404")).toBe("HTTP 404");
+  expect(compactSourceFailureReason("HLS master playlist has no variant URI")).toBe(
+    "invalid HLS playlist",
+  );
+  expect(compactSourceFailureReason("Playback failed on this stream")).toBe("playback failed");
 });

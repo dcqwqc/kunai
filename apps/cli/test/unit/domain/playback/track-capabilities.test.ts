@@ -356,3 +356,23 @@ describe("track panel rows + navigation", () => {
     expect(selectableCapabilityAt(factGroups, 0)).toBeNull();
   });
 });
+
+test("mirror inventory suppresses repeated host and status evidence", () => {
+  const groups = buildTrackCapabilities(
+    view({
+      sourceGroups: [
+        sourceGroup({
+          id: "movy:denver",
+          label: "Movy denver",
+          state: "failed",
+          hints: ["failed", "host api.wecollege.net", "not tried"],
+          nativeLabels: ["api.wecollege.net", "denver"],
+          disabledReason: "denver sources failed: HTTP 404",
+        }),
+      ],
+    }),
+  );
+  const row = groups.find((group) => group.section === "source")?.rows[0];
+  expect(row?.reason).toBe("denver sources failed: HTTP 404");
+  expect(row?.detail).toBeUndefined();
+});

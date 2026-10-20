@@ -30,8 +30,9 @@ export function listOrderedPlaybackSourceIds(
       .filter(
         (source) =>
           source.status !== "failed" &&
-          source.status !== "exhausted" &&
-          source.status !== "skipped",
+          // A skipped source was never tested. It is a valid next automatic
+          // recovery candidate, unlike a failed or exhausted source.
+          source.status !== "exhausted",
       )
       .map((source) => source.id);
   }
@@ -80,6 +81,16 @@ export function planStartupFailover(input: {
   const maxAttempts = input.maxFailoverAttempts ?? MAX_STARTUP_FAILOVER_ATTEMPTS;
   if (input.failoverAttempts >= maxAttempts) {
     return { kind: "give-up" };
+  }
+
+  // Keep one bounded recovery slot for another provider. Otherwise a large
+  // inventory of never-tested mirrors exhausts the budget on one broken host.
+  if (
+    input.hasFallbackProvider &&
+    input.providerHopUsed !== true &&
+    input.failoverAttempts >= maxAttempts - 1
+  ) {
+    return { kind: "fallback-provider" };
   }
 
   const nextSourceId = pickNextCatalogSourceId(
