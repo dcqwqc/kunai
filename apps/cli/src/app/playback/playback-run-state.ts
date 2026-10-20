@@ -36,6 +36,8 @@ export interface PlaybackRunState {
   autoRecoverEpisodeKey: string | null;
   /** Source ids already tried during startup stall / fail-to-start failover this episode. */
   triedFailoverSourceIds: string[];
+  /** Current episode's tried stream/rung ids; never retry a failing 4K rung in a loop. */
+  triedFailoverStreamIds: string[];
   /** True after an automatic provider hop was spent for this episode failover cascade. */
   startupProviderHopUsed: boolean;
   /** Forced local/online source selection for the next episode, when requested. */
@@ -66,6 +68,7 @@ export function createPlaybackRunState(init: {
     autoSourceRecoverAttempts: 0,
     autoRecoverEpisodeKey: null,
     triedFailoverSourceIds: [],
+    triedFailoverStreamIds: [],
     startupProviderHopUsed: false,
     episodePlaybackSourceOverride: null,
     localEpisodeTiming: null,

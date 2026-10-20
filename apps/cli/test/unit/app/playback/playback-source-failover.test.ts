@@ -4,6 +4,7 @@ import {
   listOrderedPlaybackSourceIds,
   pickNextCatalogSourceId,
   planStartupFailover,
+  pickLowerQualityRecoveryStream,
   shouldUseProviderPlaybackRecovery,
   STARTUP_STALL_TIMEOUT_MS,
 } from "@/app/playback/playback-source-failover";
@@ -172,4 +173,73 @@ test("auto recovery reserves a provider hop instead of cycling an entire dead mi
     kind: "advance-source",
     sourceId: "lane:austin",
   });
+});
+
+test("4K stall first retries a distinct 1080p rung, then chooses another source", () => {
+  const result = {
+    selectedStreamId: "miami:2160",
+    sources: [
+      { id: "miami", status: "selected" },
+      { id: "seattle", status: "skipped" },
+      { id: "paris", status: "skipped" },
+    ],
+    streams: [
+      { id: "miami:2160", sourceId: "miami", url: "https://cdn.test/4k", qualityRank: 2160 },
+      { id: "miami:1080", sourceId: "miami", url: "https://cdn.test/hd", qualityRank: 1080 },
+      { id: "miami:720", sourceId: "miami", url: "https://cdn.test/sd", qualityRank: 720 },
+    ],
+  } as unknown as ProviderResolveResult;
+  expect(pickLowerQualityRecoveryStream(result, new Set(["miami:2160"]))).toEqual({
+    id: "miami:1080",
+    sourceId: "miami",
+  });
+  // After the one quality downgrade, prefer Seattle rather than trying an
+  // endless sequence of poorer variants on the same unstable server.
+  expect(pickLowerQualityRecoveryStream(result, new Set(["miami:2160", "miami:1080"]))).toBeNull();
+  expect(
+    pickLowerQualityRecoveryStream(result, new Set(["miami:2160", "miami:1080", "miami:720"])),
+  ).toBeNull();
+  // A failed 4K session cannot restart itself forever. If the preferred
+  // backup resolves to a different source, the attempted target still counts.
+  const tried = new Set(["miami"]);
+  const first = planStartupFailover({
+    sourceIds: ["miami", "seattle", "paris"],
+    currentSourceId: "miami",
+    triedSourceIds: tried,
+    hasFallbackProvider: true,
+    failoverAttempts: 1,
+  });
+  expect(first).toEqual({ kind: "advance-source", sourceId: "seattle" });
+  if (first.kind === "advance-source") tried.add(first.sourceId);
+  const second = planStartupFailover({
+    sourceIds: ["miami", "seattle", "paris"],
+    currentSourceId: "miami", // provider returned Miami instead of Seattle
+    triedSourceIds: tried,
+    hasFallbackProvider: true,
+    failoverAttempts: 2,
+  });
+  expect(second).toEqual({ kind: "advance-source", sourceId: "paris" });
+  if (second.kind === "advance-source") tried.add(second.sourceId);
+  expect(
+    planStartupFailover({
+      sourceIds: ["miami", "seattle", "paris"],
+      currentSourceId: "miami",
+      triedSourceIds: tried,
+      hasFallbackProvider: true,
+      failoverAttempts: 3,
+    }),
+  ).toEqual({ kind: "fallback-provider" });
+});
+
+test("quality downshift cannot retry identical URLs or unknown ranks", () => {
+  const result = {
+    selectedStreamId: "4k",
+    streams: [
+      { id: "4k", sourceId: "miami", url: "https://a", qualityRank: 2160 },
+      { id: "same", sourceId: "miami", url: "https://a", qualityRank: 1080 },
+      { id: "other", sourceId: "seattle", url: "https://b", qualityRank: 720 },
+      { id: "unknown", sourceId: "miami", url: "https://c" },
+    ],
+  } as unknown as ProviderResolveResult;
+  expect(pickLowerQualityRecoveryStream(result, new Set())).toBeNull();
 });

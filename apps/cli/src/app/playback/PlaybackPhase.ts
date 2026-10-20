@@ -100,6 +100,7 @@ import {
 import { invalidateEpisodePlaybackCaches } from "@/app/playback/playback-source-cache-invalidation";
 import {
   listOrderedPlaybackSourceIds,
+  pickLowerQualityRecoveryStream,
   planStartupFailover,
   shouldUseProviderPlaybackRecovery,
   STARTUP_STALL_TIMEOUT_MS,
@@ -1051,6 +1052,7 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
           run.autoRecoverEpisodeKey = episodeScopeKey;
           run.autoSourceRecoverAttempts = 0;
           run.triedFailoverSourceIds = [];
+          run.triedFailoverStreamIds = [];
           run.startupProviderHopUsed = false;
         }
         const queuedSourceOverride = playerControl.consumePendingEpisodeSourceOverride();
@@ -2253,10 +2255,40 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
             successfulProviderId: resolvedProviderId,
           });
 
-          stream = applyPreferredStreamSelection(
-            stream,
-            getPreferredStreamSelection(currentProvider.metadata.id, currentEpisode),
+          const requestedRecoverySelection = getPreferredStreamSelection(
+            currentProvider.metadata.id,
+            currentEpisode,
           );
+          stream = applyPreferredStreamSelection(stream, requestedRecoverySelection);
+          // A requested automatic source can disappear or fail its resolve gate.
+          // Providers then correctly return another source, but the old pin
+          // otherwise survives into every iteration and keeps selecting the
+          // same broken server. Do not erase a user's manually chosen source.
+          const landedSourceId = stream.providerResolveResult?.streams.find(
+            (candidate) => candidate.id === stream.providerResolveResult?.selectedStreamId,
+          )?.sourceId;
+          if (
+            requestedRecoverySelection.sourceId &&
+            landedSourceId &&
+            landedSourceId !== requestedRecoverySelection.sourceId &&
+            run.triedFailoverSourceIds.includes(requestedRecoverySelection.sourceId)
+          ) {
+            await selectionCoordinator.applyEpisodeSelection(
+              currentProvider.metadata.id,
+              currentEpisode,
+              { sourceId: null, streamId: null },
+            );
+            diagnosticsService.record({
+              category: "playback",
+              operation: "playback.auto-recovery.source-unavailable",
+              message: "Automatic recovery source unavailable; clearing stale episode pin",
+              context: {
+                requestedSourceId: requestedRecoverySelection.sourceId,
+                landedSourceId,
+                provider: currentProvider.metadata.id,
+              },
+            });
+          }
 
           // Await timing — stream resolve takes much longer so this is nearly free.
           // If IntroDB timed out and returned null, schedule a background retry that
@@ -2974,6 +3006,16 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
               if (currentSourceId && !run.triedFailoverSourceIds.includes(currentSourceId)) {
                 run.triedFailoverSourceIds.push(currentSourceId);
               }
+              if (
+                selectedResolveStream &&
+                !run.triedFailoverStreamIds.includes(selectedResolveStream.id)
+              ) {
+                run.triedFailoverStreamIds.push(selectedResolveStream.id);
+              }
+              const lowerQualityStream = pickLowerQualityRecoveryStream(
+                preparedStream.providerResolveResult,
+                new Set(run.triedFailoverStreamIds),
+              );
 
               const verifiedBackup = backupTarget
                 ? backupPrefetch.peekReadyFor(backupTarget)
@@ -3012,7 +3054,32 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
                 providerHopUsed: run.startupProviderHopUsed,
               });
 
-              if (failoverPlan.kind === "advance-source") {
+              if (lowerQualityStream) {
+                // Keep the current CDN, but discard its failing 4K rung.
+                // Reserve the target stream before the next resolve, since
+                // that resolve may transparently land on a different rung.
+                run.triedFailoverStreamIds.push(lowerQualityStream.id);
+                await selectionCoordinator.applyEpisodeSelection(
+                  resolvedProviderId,
+                  currentEpisode,
+                  { sourceId: lowerQualityStream.sourceId, streamId: lowerQualityStream.id },
+                );
+                diagnosticsService.record({
+                  category: "playback",
+                  operation: "playback.auto-recovery.quality-downshift",
+                  message: "Automatically trying a lower-quality stream after decoder failure",
+                  context: {
+                    provider: resolvedProviderId,
+                    sourceId: lowerQualityStream.sourceId,
+                  },
+                });
+              } else if (failoverPlan.kind === "advance-source") {
+                // A provider may refuse this target and return the previous
+                // source. Track the *attempted target*, not just what played.
+                // This prevents Miami→Paris→Miami→Paris recovery loops.
+                if (!run.triedFailoverSourceIds.includes(failoverPlan.sourceId)) {
+                  run.triedFailoverSourceIds.push(failoverPlan.sourceId);
+                }
                 await selectionCoordinator.applyAutomaticSourceFailover(
                   resolvedProviderId,
                   currentEpisode,
@@ -3162,6 +3229,7 @@ export class PlaybackPhase implements Phase<TitleInfo, PlaybackOutcome> {
               run.pendingRecomputeSources = false;
               run.startupProviderHopUsed = true;
               run.triedFailoverSourceIds = [];
+              run.triedFailoverStreamIds = [];
               if (playbackControlAction !== "fallback") {
                 run.autoSourceRecoverAttempts += 1;
               }

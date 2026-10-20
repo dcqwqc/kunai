@@ -47,6 +47,41 @@ export function listOrderedPlaybackSourceIds(
   return ids;
 }
 
+/**
+ * Before leaving an intermittently failing 4K server, try a lower-quality
+ * variant of the very same source. This preserves continuity and avoids
+ * returning to a source we already learned cannot sustain its highest rung.
+ * Only genuine lower ranks with distinct URLs qualify.
+ */
+export function pickLowerQualityRecoveryStream(
+  result: ProviderResolveResult | null | undefined,
+  attemptedStreamIds: ReadonlySet<string>,
+): { readonly id: string; readonly sourceId: string } | null {
+  if (!result) return null;
+  const current = result.streams.find((row) => row.id === result.selectedStreamId);
+  if (!current?.sourceId || !current.url || !Number.isFinite(current.qualityRank)) return null;
+  // One downgrade per source is enough. Beyond that, switch to the next
+  // server instead of burning the entire recovery budget on the same CDN.
+  const attemptedHere = result.streams.filter(
+    (row) => row.sourceId === current.sourceId && attemptedStreamIds.has(row.id),
+  ).length;
+  if (attemptedHere >= 2) return null;
+  const rank = current.qualityRank ?? 0;
+  const candidate = [...result.streams]
+    .filter(
+      (row) =>
+        row.id !== current.id &&
+        row.sourceId === current.sourceId &&
+        Boolean(row.url) &&
+        row.url !== current.url &&
+        typeof row.qualityRank === "number" &&
+        row.qualityRank < rank &&
+        !attemptedStreamIds.has(row.id),
+    )
+    .sort((a, b) => (b.qualityRank ?? 0) - (a.qualityRank ?? 0))[0];
+  return candidate?.sourceId ? { id: candidate.id, sourceId: candidate.sourceId } : null;
+}
+
 /** Next catalog source after the current one that has not already been tried. */
 export function pickNextCatalogSourceId(
   sourceIds: readonly string[],
