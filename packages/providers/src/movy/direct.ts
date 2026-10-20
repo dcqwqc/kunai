@@ -565,7 +565,13 @@ export async function resolveMovyDirect(
     input.preferredSourceId,
     input.startupPriority,
   );
-  const sourceInventorySeeds = buildMovySourceInventoryCandidates(cycleCandidates, cachePolicy);
+  // Keep Tracks and automatic recovery in the exact same quality/health
+  // priority as the resolver. Otherwise Miami can be chosen first but a
+  // subsequent failure walks Boise/Austin before the verified Seattle backup.
+  const sourceInventorySeeds = buildMovySourceInventoryCandidates(
+    [...cycleCandidates].sort((left, right) => (left.priority ?? 0) - (right.priority ?? 0)),
+    cachePolicy,
+  );
 
   emitTraceEvent(events, context, {
     type: "provider:start",

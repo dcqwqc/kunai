@@ -130,6 +130,31 @@ describe("resolveMovyDirect", () => {
     ).toBe(true);
   });
 
+  test("quality-first inventory exposes the next best recovery lane first", async () => {
+    const ctx = contextReturning((url) => {
+      if (url.includes("/seed")) {
+        return new Response(JSON.stringify({ seed: FIXTURE.seed, ttlMs: 30000 }), { status: 200 });
+      }
+      if (url.includes("/miami/sources")) {
+        return new Response(FIXTURE.body, { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "lane unavailable" }), { status: 500 });
+    });
+    const result = await movyProviderModule.resolve(
+      {
+        ...MOVIE_INPUT,
+        startupPriority: "quality-first",
+      },
+      ctx,
+    );
+    expect(result.status).toBe("resolved");
+    expect(result.sources?.slice(0, 3).map((source) => source.id)).toEqual([
+      "source:movy:miami",
+      "source:movy:seattle",
+      "source:movy:paris",
+    ]);
+  });
+
   test("consults endpoint health and skips a quarantined lane without fetching it", async () => {
     const seen: string[] = [];
     const requestedLanes: string[] = [];
