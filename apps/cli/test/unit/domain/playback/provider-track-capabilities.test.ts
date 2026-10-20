@@ -94,3 +94,15 @@ test("the playing provider always lists even when lane eligibility excludes it",
   expect(group.rows.find((row) => row.value === "allanime")?.selected).toBe(true);
   expect(group.rows.find((row) => row.value === "allanime")?.reason).toBe("Current provider");
 });
+
+test("anime picker ranks anime providers before cross-lane movie/series fallbacks", () => {
+  const group = buildProviderTrackCapabilities({
+    providers,
+    mode: "anime",
+    lanes: ["series", "anime"],
+    currentProviderId: "allanime",
+  });
+  expect(group.rows.map((row) => row.value)).toEqual(["allanime", "miruro", "vidking"]);
+  expect(group.rows.find((row) => row.value === "vidking")?.risk).toBe("fallback");
+  expect(group.rows.find((row) => row.value === "miruro")?.risk).toBe("normal");
+});

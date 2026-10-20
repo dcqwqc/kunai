@@ -59,6 +59,18 @@ import type {
   PlayerService,
 } from "./PlayerService";
 
+/**
+ * Compatibility guard: live Hianime HLS on Mirai decodes in native mpv but
+ * the Showtime GStreamer bridge emits expired-stream before first frame.
+ * Route this specific broken integration through system mpv, preserving
+ * Showtime for all other providers and retaining app-managed playback.
+ */
+export function prefersNativeMpvCompatibilityFallback(
+  stream: Pick<StreamInfo, "providerResolveResult">,
+): boolean {
+  return stream.providerResolveResult?.providerId === "hianime";
+}
+
 export class PlayerServiceImpl implements PlayerService {
   private persistentSession: PersistentMpvSession | null = null;
   private persistentSessionCreation: Promise<PersistentMpvSession> | null = null;
@@ -158,7 +170,8 @@ export class PlayerServiceImpl implements PlayerService {
 
     // Admission is settled; allocate and publish the generation before the
     // first await so no consumer can observe an event from an unknown cycle.
-    const reuseProcess = this.willReusePersistentProcess(options);
+    const preferSystemMpv = prefersNativeMpvCompatibilityFallback(stream);
+    const reuseProcess = !preferSystemMpv && this.willReusePersistentProcess(options);
     const retiredGeneration = reuseProcess ? null : this.currentGeneration;
     const generation = this.activateGeneration(reuseProcess);
     options.onGenerationActivated?.(generation);
@@ -314,7 +327,7 @@ export class PlayerServiceImpl implements PlayerService {
           ? "local"
           : "remote";
       const result =
-        options.playbackMode === "autoplay-chain"
+        options.playbackMode === "autoplay-chain" && !prefersNativeMpvCompatibilityFallback(stream)
           ? await this.playAutoplayChainStream(
               playbackStream,
               options,
@@ -723,6 +736,7 @@ export class PlayerServiceImpl implements PlayerService {
         mpv: {
           ...this.deps.mpv,
           startupPriority: this.deps.config.startupPriority,
+          preferSystemMpv: prefersNativeMpvCompatibilityFallback(stream),
         },
       });
     } finally {

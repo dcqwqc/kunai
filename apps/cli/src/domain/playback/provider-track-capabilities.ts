@@ -60,8 +60,20 @@ export function buildProviderTrackCapabilities(
         ...eligible,
         ...input.providers.filter((provider) => provider.id === input.currentProviderId),
       ];
-  const rows: TrackCapability[] = listed.map((provider) => {
+  // The most relevant lane comes first. Cross-lane adapters are still
+  // selectable, but should not crowd out actual anime providers (the old
+  // inventory placed VidLink ahead of HiAnime/Miruro for anime titles).
+  const ordered = [...listed].sort((left, right) => {
+    const leftNative =
+      input.mode === "anime" ? left.isAnimeProvider === true : left.isAnimeProvider !== true;
+    const rightNative =
+      input.mode === "anime" ? right.isAnimeProvider === true : right.isAnimeProvider !== true;
+    if (leftNative !== rightNative) return leftNative ? -1 : 1;
+    return 0;
+  });
+  const rows: TrackCapability[] = ordered.map((provider) => {
     const selected = provider.id === input.currentProviderId;
+    const secondaryLane = input.mode === "anime" && !provider.isAnimeProvider;
     const health = input.healthByProviderId?.[provider.id];
     return {
       section: "provider",
@@ -72,7 +84,7 @@ export function buildProviderTrackCapabilities(
       detail:
         [provider.description, healthDetail(provider.id, health)].filter(Boolean).join(" · ") ||
         undefined,
-      risk: health?.errorClass ? "failed" : "normal",
+      risk: health?.errorClass ? "failed" : secondaryLane ? "fallback" : "normal",
       reason: selected ? "Current provider" : undefined,
     };
   });

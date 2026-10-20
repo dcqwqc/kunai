@@ -130,7 +130,9 @@ export async function launchMpv(opts: {
       baseEmit(event);
     };
 
-    const mpvInvocation = discoverMpvInvocation();
+    const mpvInvocation = discoverMpvInvocation({
+      preferSystemMpv: opts.mpv?.preferSystemMpv,
+    });
     if (!mpvInvocation) {
       throw new MpvLaunchError("dependency", "mpv is not installed or not found on PATH");
     }

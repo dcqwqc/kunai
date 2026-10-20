@@ -196,3 +196,42 @@ test("source failure reasons are concise for provider mirrors", () => {
   );
   expect(compactSourceFailureReason("Playback failed on this stream")).toBe("playback failed");
 });
+
+test("unverified providers never claim they are available", () => {
+  const providerGroup: TrackCapabilityGroup[] = [
+    {
+      section: "provider",
+      title: "Provider",
+      selectable: true,
+      rows: [
+        {
+          section: "provider",
+          label: "HiAnime",
+          value: "hianime",
+          selected: false,
+          enabled: true,
+          risk: "normal",
+        },
+        {
+          section: "provider",
+          label: "VidLink",
+          value: "vidlink",
+          selected: false,
+          enabled: true,
+          risk: "fallback",
+        },
+      ],
+    },
+  ];
+  const rendered = captureFrame(
+    <TracksPanelShell
+      groups={providerGroup}
+      width={112}
+      nav={createInitialTracksNav({ focusedPane: "options" })}
+    />,
+    { columns: 112 },
+  );
+  expect(rendered).toContain("not checked");
+  expect(rendered).toContain("movie/series fallback");
+  expect(rendered).not.toContain("available");
+});

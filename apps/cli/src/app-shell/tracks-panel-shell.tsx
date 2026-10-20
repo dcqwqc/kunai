@@ -105,6 +105,11 @@ function rowTag(capability: TrackCapability): string | null {
       : (capability.reason ?? "failed on last try");
   }
   if (capability.selected) return capability.section === "source" ? "selected" : "current";
+  // A registered provider is NOT a verified playable source. Never display
+  // "available" until playback or stream-health evidence establishes it.
+  if (capability.section === "provider") {
+    return capability.risk === "fallback" ? "movie/series fallback · not checked" : "not checked";
+  }
   if (capability.risk === "fallback") return "not tried";
   if (capability.risk === "unavailable") return "unavailable";
   if (capability.enabled) return "available";
