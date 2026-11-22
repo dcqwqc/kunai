@@ -1,11 +1,15 @@
 package dev.kitsunekode.kunai.android.data
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.json.JSONArray
+import java.io.File
+import java.security.MessageDigest
 import java.net.URLEncoder
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
@@ -14,7 +18,8 @@ import java.util.concurrent.ConcurrentHashMap
  * On-device catalog. No request depends on Mirai, Philipedia, Moonlight or Termux.
  * AniList and TMDB-compatible discovery return metadata, never assumed streams.
  */
-class Catalog {
+class Catalog(context: Context) {
+    private val cacheRoot = File(context.applicationContext.cacheDir, "kunai-metadata")
     private val cache = ConcurrentHashMap<String, Pair<Long, List<Title>>>()
     private val anilist = "https://graphql.anilist.co"
     private val tmdb = "https://db.wingsdatabase.com/3"
@@ -76,6 +81,33 @@ class Catalog {
                 seasonCount = json.optInt("number_of_seasons").takeIf { it > 0 },
             )
         }
+    }
+
+    /** Verified official YouTube trailer; only reveal on a real metadata match. */
+    suspend fun trailer(title: Title): String? = withContext(Dispatchers.IO) {
+        val youtubeId = Regex("[A-Za-z0-9_-]{11}")
+        if (title.kind == Kind.ANIME) {
+            val id = details(title).trailerId
+            return@withContext id?.takeIf { youtubeId.matches(it) }
+        }
+        val type = if (title.kind == Kind.MOVIE) "movie" else "tv"
+        val candidates = mutableListOf<JSONObject>()
+        for (language in listOf("en-US", "ja-JP")) {
+            val result = runCatching {
+                Network.json("$tmdb/$type/${title.id}/videos?language=$language")
+                    .optJSONArray("results")
+            }.getOrNull() ?: continue
+            for (i in 0 until result.length()) {
+                val video = result.optJSONObject(i) ?: continue
+                if (video.optString("site") == "YouTube" &&
+                    video.optString("type") == "Trailer" &&
+                    youtubeId.matches(video.optString("key")))
+                    candidates.add(video)
+            }
+            if (candidates.any { it.optBoolean("official") }) break
+        }
+        candidates.firstOrNull { it.optBoolean("official") }?.optString("key")
+            ?: candidates.firstOrNull()?.optString("key")
     }
 
     suspend fun episodes(title: Title, season: Int = 1): List<Episode> = withContext(Dispatchers.IO) {
@@ -193,6 +225,39 @@ class Catalog {
     private fun cached(key: String, loader: () -> List<Title>): List<Title> {
         val now = System.currentTimeMillis()
         cache[key]?.let { if (it.first > now) return it.second }
-        return loader().also { cache[key] = now + 8 * 60_000 to it }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val file = File(cacheRoot, "$digest.json")
+        val disk = runCatching {
+            if (!file.isFile || file.length() !in 2..480_000) return@runCatching null
+            val json = JSONArray(file.readText(Charsets.UTF_8))
+            buildList {
+                for (i in 0 until minOf(json.length(), 80)) {
+                    json.optJSONObject(i)?.let(Library::decode)?.let(::add)
+                }
+            }.takeIf { it.isNotEmpty() }
+        }.getOrNull()
+        if (disk != null && now - file.lastModified() in 0..(4 * 60 * 60_000L)) {
+            cache[key] = now + 8 * 60_000L to disk
+            return disk
+        }
+        val fresh = try { loader() } catch (e: Exception) {
+            if (disk != null) return disk
+            throw e
+        }
+        if (fresh.isEmpty() && disk != null) return disk
+        if (fresh.isNotEmpty()) {
+            runCatching {
+                cacheRoot.mkdirs()
+                val json = JSONArray()
+                fresh.take(80).forEach { json.put(Library.encode(it)) }
+                val temp = File(cacheRoot, "$digest.tmp")
+                temp.writeText(json.toString(), Charsets.UTF_8)
+                if (!temp.renameTo(file)) temp.delete()
+            }
+        }
+        cache[key] = now + 8 * 60_000L to fresh
+        return fresh
     }
 }

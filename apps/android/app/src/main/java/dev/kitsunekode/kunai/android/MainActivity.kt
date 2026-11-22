@@ -1,8 +1,18 @@
 package dev.kitsunekode.kunai.android
 
 import android.app.Activity
+import android.content.Intent
+import android.content.ContentValues
+import android.content.ContentUris
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.net.Uri
+import android.widget.Toast
 import android.content.res.Configuration
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.ByteArrayOutputStream
 import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,6 +38,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.runtime.*
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.*
@@ -45,6 +59,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withTimeoutOrNull
 import dev.kitsunekode.kunai.android.data.Catalog
 import dev.kitsunekode.kunai.android.data.Episode
 import dev.kitsunekode.kunai.android.data.Kaa
@@ -69,7 +86,7 @@ private object Ember {
     val muted = Color(0xFFAB9DAC)
 }
 private val round = RoundedCornerShape(12.dp)
-private val sections = listOf("Home", "Discover", "Calendar", "Continue", "My List")
+private val sections = listOf("Home", "Discover", "Calendar", "Continue", "My List", "Settings")
 private fun safeMessage(e: Throwable) = when {
     e.message.orEmpty().contains("429") -> "Catalog is rate-limited. Try again shortly."
     e.message.orEmpty().contains("HTTP") -> "Catalog temporarily unavailable."
@@ -77,13 +94,119 @@ private fun safeMessage(e: Throwable) = when {
 }
 
 class MainActivity : ComponentActivity() {
+    private var libraryRefresh by mutableIntStateOf(0)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val tv = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) ==
             Configuration.UI_MODE_TYPE_TELEVISION ||
             packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-        setContent { KunaiApp(this, tv) }
+        val export = registerForActivityResult(
+            ActivityResultContracts.CreateDocument("application/json")
+        ) { uri ->
+            if (uri != null) runCatching {
+                val bytes = Library(this).exportJson().toByteArray(Charsets.UTF_8)
+                contentResolver.openOutputStream(uri, "w")?.use { it.write(bytes) }
+                    ?: error("Cannot open the selected file")
+            }.onSuccess { notifyUser("Library exported") }
+                .onFailure { notifyUser("Export failed. Choose another location.") }
+        }
+        val import = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) importFromUri(uri)
+        }
+        setContent {
+            KunaiApp(this, tv, libraryRefresh,
+                onExport = {
+                    if (tv && Build.VERSION.SDK_INT >= 29) backupToDownloads()
+                    else export.launch("kunai-library.json")
+                },
+                onImport = {
+                    if (tv && Build.VERSION.SDK_INT >= 29) restoreLatestBackup()
+                    else import.launch(arrayOf("application/json", "text/plain"))
+                })
+        }
     }
+
+    private fun importFromUri(uri: Uri) {
+        runCatching {
+            val input = contentResolver.openInputStream(uri)
+                ?: error("Cannot open the selected file")
+            val out = ByteArrayOutputStream()
+            input.use { stream ->
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    require(out.size() + count <= Library.MAX_BACKUP_BYTES) {
+                        "Library file is too large"
+                    }
+                    out.write(buffer, 0, count)
+                }
+            }
+            Library(this).mergeJson(out.toString(Charsets.UTF_8.name()))
+        }.onSuccess { result ->
+            libraryRefresh++
+            notifyUser("Merged: ${result.savedAdded} titles, ${result.historyAdded} episodes")
+        }.onFailure { notifyUser(it.message ?: "Import failed") }
+    }
+
+    private fun backupToDownloads() {
+        if (Build.VERSION.SDK_INT < 29) return
+        runCatching {
+            val name = "kunai-library-" +
+                SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".json"
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                put(MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + "/Kunai")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val location = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val uri = contentResolver.insert(location, values)
+                ?: error("Could not create a backup")
+            try {
+                contentResolver.openOutputStream(uri, "w")?.use { output ->
+                    output.write(Library(this).exportJson().toByteArray(Charsets.UTF_8))
+                } ?: error("Could not write the backup")
+                check(contentResolver.update(uri, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null) > 0) { "Backup could not be finalized" }
+            } catch (e: Exception) {
+                contentResolver.delete(uri, null, null)
+                throw e
+            }
+        }.onSuccess { notifyUser("Saved to Downloads/Kunai") }
+            .onFailure { notifyUser(it.message ?: "Could not export library") }
+    }
+
+    private fun restoreLatestBackup() {
+        if (Build.VERSION.SDK_INT < 29) return
+        runCatching {
+            val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val columns = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME)
+            val cursor = contentResolver.query(collection, columns, null, null,
+                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC")
+                ?: error("Downloads are unavailable")
+            val latest = cursor.use {
+                val idCol = it.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val nameCol = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                var found: Uri? = null
+                while (it.moveToNext()) {
+                    val name = it.getString(nameCol).orEmpty()
+                    if (name.matches(Regex("kunai-library-[0-9]{8}-[0-9]{6}\\.json"))) {
+                        found = ContentUris.withAppendedId(collection, it.getLong(idCol))
+                        break
+                    }
+                }
+                found
+            }
+            latest ?: error("No Kunai backup found in Downloads/Kunai")
+        }.onSuccess(::importFromUri)
+            .onFailure { notifyUser(it.message ?: "Could not find a backup") }
+    }
+
+    private fun notifyUser(message: String) =
+        Toast.makeText(this, message.take(150), Toast.LENGTH_LONG).show()
 }
 
 @Composable private fun KText(
@@ -374,20 +497,32 @@ class MainActivity : ComponentActivity() {
     onClose: () -> Unit,
     onSaved: () -> Unit,
     onPlay: (Title, Episode) -> Unit,
+    onTrailer: (String) -> Unit,
 ) {
     var full by remember(title.id) { mutableStateOf(title) }
     var episodes by remember(title.id) { mutableStateOf<List<Episode>>(emptyList()) }
     var busy by remember(title.id) { mutableStateOf(true) }
+    var trailerId by remember(title.id) { mutableStateOf<String?>(null) }
     var msg by remember(title.id) { mutableStateOf("") }
     var season by remember(title.id) { mutableIntStateOf(1) }
     var saved by remember(title.id) { mutableStateOf(library.has(title)) }
     LaunchedEffect(title.id, season) {
         busy = true
-        full = runCatching { catalog.details(title) }.getOrDefault(title)
-        episodes = runCatching {
-            if (title.kind == Kind.ANIME) kaa.episodes(title)
-            else catalog.episodes(title, season)
-        }.getOrDefault(emptyList())
+        val metadata = async { runCatching { catalog.details(title) }.getOrDefault(title) }
+        val episodeList = async {
+            runCatching {
+                if (title.kind == Kind.ANIME) kaa.episodes(title)
+                else catalog.episodes(title, season)
+            }.getOrDefault(emptyList())
+        }
+        val filmTrailer = if (title.kind != Kind.ANIME) async {
+            runCatching { catalog.trailer(title) }.getOrNull()
+        } else null
+        full = metadata.await()
+        episodes = episodeList.await()
+        trailerId = if (title.kind == Kind.ANIME) full.trailerId?.takeIf {
+            it.matches(Regex("[A-Za-z0-9_-]{11}"))
+        } else filmTrailer?.await()
         busy = false
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -420,6 +555,9 @@ class MainActivity : ComponentActivity() {
                     if (title.kind == Kind.MOVIE) {
                         FocusButton("▶ Play movie", primary = true,
                             onClick = { onPlay(full, Episode(1, full.name)) })
+                    }
+                    trailerId?.let { trailer ->
+                        FocusButton("▶ Trailer", onClick = { onTrailer(trailer) })
                     }
                 }
             }
@@ -467,8 +605,69 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun KunaiApp(host: Activity, tv: Boolean) {
-    val catalog = remember { Catalog() }
+@Composable private fun LoadingState() {
+    val transition = rememberInfiniteTransition(label = "catalog-loading")
+    val rotation by transition.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(850, easing = LinearEasing)
+        ),
+        label = "catalog-ring",
+    )
+    Row(verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Canvas(Modifier.size(24.dp).graphicsLayer(rotationZ = rotation)) {
+            drawArc(
+                color = Ember.pink, startAngle = -90f, sweepAngle = 255f,
+                useCenter = false,
+                style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round),
+            )
+        }
+        KText("Loading…", color = Ember.muted)
+    }
+}
+
+@Composable private fun LibrarySettings(
+    library: Library,
+    tv: Boolean,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+        .padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        KText("Library", size = 24.sp, weight = FontWeight.Bold)
+        KText("${library.saved().size} saved titles · ${library.recent().size} watched episodes",
+            color = Ember.muted, size = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            FocusButton(if (tv) "Save backup" else "Export",
+                primary = true, onClick = onExport)
+            FocusButton(if (tv) "Restore latest" else "Import & merge",
+                onClick = onImport)
+        }
+        KText(
+            if (tv) "Backups save to Downloads/Kunai on this device. " +
+                "Restore latest merges the most recent backup saved here. " +
+                "Nothing is deleted, and playback never needs a server."
+            else "Transfer your saved titles and watch positions with a library file. " +
+                "Import adds missing titles and keeps the newer watch position. " +
+                "Nothing is deleted, and playback never needs a server.",
+            color = Ember.muted, size = 13.sp)
+        Spacer(Modifier.height(13.dp))
+        KText("Kunai", size = 17.sp, weight = FontWeight.SemiBold)
+        KText("0.1.4 · Native Android TV & phone", color = Ember.muted, size = 12.sp)
+    }
+}
+
+@Composable private fun KunaiApp(
+    host: Activity,
+    tv: Boolean,
+    externalLibraryRevision: Int,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+) {
+    val catalog = remember { Catalog(host.applicationContext) }
     val kaa = remember { Kaa() }
     val movy = remember { Movy() }
     val library = remember { Library(host) }
@@ -479,6 +678,7 @@ class MainActivity : ComponentActivity() {
     var selected by remember { mutableStateOf<Title?>(null) }
     var items by remember { mutableStateOf<List<Title>>(emptyList()) }
     var shelves by remember { mutableStateOf<Map<Kind, List<Title>>>(emptyMap()) }
+    var featured by remember { mutableStateOf<Title?>(null) }
     var upcoming by remember { mutableStateOf<List<Upcoming>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -495,26 +695,73 @@ class MainActivity : ComponentActivity() {
 
     LaunchedEffect(page, search, kinds) {
         if (selected != null) return@LaunchedEffect
-        if (search.length in 1..1) return@LaunchedEffect
-        loading = true
+        if (search.length == 1) {
+            items = emptyList()
+            loading = false
+            return@LaunchedEffect
+        }
+        loading = page in setOf("Home", "Discover", "Calendar")
         error = ""
         try {
             if (search.isNotBlank()) {
+                val term = search
                 delay(240)
-                items = catalog.search(search, kinds)
-                page = "Discover"
+                items = emptyList()
+                coroutineScope {
+                    Kind.entries.filter { it in kinds }.map { kind ->
+                        launch {
+                            val found = withTimeoutOrNull(9_000) {
+                                runCatching { catalog.search(term, setOf(kind)) }
+                                    .getOrDefault(emptyList())
+                            }.orEmpty()
+                            if (search == term && found.isNotEmpty()) {
+                                items = (items + found).distinctBy { it.kind to it.id }
+                            }
+                        }
+                    }.joinAll()
+                }
             } else when (page) {
                 "Home" -> {
-                    val pages = kinds.map { k -> scope.async { k to catalog.browse(k) } }.awaitAll()
-                    shelves = pages.toMap()
+                    shelves = shelves.filterKeys { it in kinds }
+                    if (featured?.kind !in kinds) featured = null
+                    coroutineScope {
+                        Kind.entries.filter { it in kinds }.map { kind ->
+                            launch {
+                                val found = withTimeoutOrNull(9_000) {
+                                    runCatching { catalog.browse(kind) }
+                                        .getOrDefault(emptyList())
+                                }.orEmpty()
+                                if (found.isNotEmpty()) {
+                                    shelves = shelves + (kind to found)
+                                    if (featured == null) featured = found.first()
+                                }
+                            }
+                        }.joinAll()
+                    }
+                    if (shelves.values.all { it.isEmpty() }) {
+                        error = "Catalog unavailable. Check your connection and retry."
+                    }
                 }
                 "Discover" -> {
-                    items = catalog.recommendations(kinds)
+                    items = emptyList()
+                    coroutineScope {
+                        Kind.entries.filter { it in kinds }.map { kind ->
+                            launch {
+                                val found = withTimeoutOrNull(9_000) {
+                                    runCatching { catalog.browse(kind) }
+                                        .getOrDefault(emptyList())
+                                }.orEmpty()
+                                if (found.isNotEmpty()) items = (items + found)
+                                    .distinctBy { it.kind to it.id }
+                            }
+                        }.joinAll()
+                    }
                 }
                 "Calendar" -> {
                     val today = System.currentTimeMillis() / 1000L
-                    upcoming = if (Kind.ANIME in kinds) catalog.calendar(today - 3600, today + 7 * 86400L)
-                        else emptyList()
+                    upcoming = if (Kind.ANIME in kinds) withTimeoutOrNull(10_000) {
+                        catalog.calendar(today - 3600, today + 7 * 86400L)
+                    }.orEmpty() else emptyList()
                 }
             }
         } catch (e: Exception) {
@@ -528,6 +775,13 @@ class MainActivity : ComponentActivity() {
         selected = null
         page = next
         if (next != "Discover") search = ""
+    }
+    fun trailer(id: String) {
+        if (!id.matches(Regex("[A-Za-z0-9_-]{11}"))) return
+        runCatching {
+            host.startActivity(Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://www.youtube.com/watch?v=$id")))
+        }.onFailure { error = "No app is available to open this trailer." }
     }
     fun play(title: Title, episode: Episode) {
         if (resolving) return
@@ -551,7 +805,7 @@ class MainActivity : ComponentActivity() {
         Row(Modifier.weight(1f)) {
             if (tv) SideNavigation(page) { nav(it) }
             Column(Modifier.weight(1f)) {
-                Header(search, {
+                if (page != "Settings") Header(search, {
                     search = it
                     if (it.isNotBlank()) page = "Discover"
                 }, kinds, { kinds = it }, tv)
@@ -559,12 +813,14 @@ class MainActivity : ComponentActivity() {
                     Details(selected!!, tv, library, catalog, kaa,
                         onClose = { selected = null },
                         onSaved = { libraryRevision++ },
-                        onPlay = ::play)
+                        onPlay = ::play,
+                        onTrailer = ::trailer)
                 } else {
                     when {
+                        page == "Settings" -> LibrarySettings(library, tv, onExport, onImport)
                         loading && items.isEmpty() && shelves.isEmpty() ->
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                KText("Loading Kunai…", color = Ember.muted)
+                                LoadingState()
                             }
                         search.isNotBlank() || page == "Discover" ->
                             TitleGrid(items.filter { it.kind in kinds }, tv) { selected = it }
@@ -574,7 +830,7 @@ class MainActivity : ComponentActivity() {
                                     horizontal = if (tv) 28.dp else 15.dp, vertical = 18.dp),
                                 verticalArrangement = Arrangement.spacedBy(29.dp)
                             ) {
-                                shelves.values.flatten().firstOrNull()?.let { featured ->
+                                featured?.let { featured ->
                                     item {
                                         Box(Modifier.fillMaxWidth().height(if (tv) 230.dp else 195.dp)
                                             .clip(RoundedCornerShape(16.dp)).background(Ember.panel)
@@ -641,10 +897,10 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         page == "My List" ->
-                            TitleGrid(remember(libraryRevision) { library.saved() }
+                            TitleGrid(remember(libraryRevision, externalLibraryRevision) { library.saved() }
                                 .filter { it.kind in kinds }, tv) { selected = it }
                         page == "Continue" ->
-                            TitleGrid(remember(libraryRevision) { library.recent().map { it.title }
+                            TitleGrid(remember(libraryRevision, externalLibraryRevision) { library.recent().map { it.title }
                                 .distinctBy { entry -> entry.kind to entry.id } }
                                 .filter { it.kind in kinds }, tv) { selected = it }
                     }

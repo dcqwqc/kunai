@@ -9,8 +9,8 @@ android {
         applicationId = "dev.kitsunekode.kunai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 5
+        versionName = "0.1.4"
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {
@@ -28,6 +28,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.foundation:foundation-layout")
+    implementation("androidx.compose.animation:animation-core")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.tv:tv-material:1.0.0")
     implementation("androidx.media3:media3-exoplayer:1.11.1")

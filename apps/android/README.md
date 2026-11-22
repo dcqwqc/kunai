@@ -40,44 +40,82 @@ signed public release.
 
 ## Device QA (November 22, 2026)
 
-- Version **0.1.0** successfully installed on the actual XGIMI (Android 11,
-  `armeabi-v7a`) without removing Moonlight. Its 1280×720 native Home, Search,
-  category filters, actual episode stills, series details and movie browsing
-  rendered and were captured from the device.
-- The actual XGIMI media session advanced independently through Black Clover
-  Season 2 episode 1, Rings of Power season 1 episode 1, and Iron Man (2008).
-  Android reported playing position about 25–28 s, buffered media and no
-  MediaSession playback error. The local app persisted Black Clover's playback
-  position (27.7 s) to its private SharedPreferences. These are **hardware
-  decoder and playback-state checks**, not proof of visible projected frames or
-  physical loudspeaker audio, which were not independently observed.
-- Source metadata, poster art and season information loaded without contacting
-  the Mirai or Philipedia Kunai services. Providers still require internet.
-- Native **0.1.1** adds fixed Ember Dusk playback controls, a direct Play movie
-  action, and narrow filtering of phone-number spam from a trending catalog.
-  Both APK builds and 3 Movy cipher parity tests passed; 0.1.1 was installed
-  on Nothing Phone without changing its foreground app. The projector went
-  offline before 0.1.1 could be installed and tested there, so it retains the
-  verified 0.1.0 build at the last check.
+- Native Android package `dev.kitsunekode.kunai` version **0.1.3** was
+  installed and verified on the XGIMI MoGo 2 Pro (Android 11, 32-bit ARM),
+  Nothing Phone 2 (Android 16), Echo Show 5 (Android 11, 32-bit ARM), and
+  Waydroid on both Mirai and Tachibana (x86_64). All installs leave the
+  existing apps and their data intact.
+- XGIMI on-device Media3 playback was observed advancing for Black Clover,
+  Rings of Power, and Iron Man; its saved position survived native updates.
+  Real 1280×720 screenshots show the Home UI, film/series artwork, episode
+  stills, and Library settings. Media3 reported no playback error. Video
+  SurfaceView screenshots are black; **physical projected video and speaker
+  output were not separately verified**.
+- Nothing Phone 2 was tested using scrcpy's private Android display, leaving
+  Instagram on its physical display uninterrupted. Real portrait captures
+  show progressive loading of Movies, Anime and Series shelves.
+- Tachibana's desktop Kunai launcher/UI remains working on port 18793
+  (required assets HTTP 200), with its own private screenshot display. The
+  desktop app, existing TV streaming backend and Moonlight are preserved.
+- The Echo Show's Home Dashboard/Loom kiosk stays in the foreground; Kunai is
+  a separate launchable app.
+
+### Library transfer
+
+The Android library uses private device storage. `Settings → Export` writes
+a small, versioned JSON snapshot; `Import & merge` combines saved titles and
+watch history without wiping local data, preferring the newer watch timestamp.
+On Android TV firmware without the document-picker app, such as this XGIMI,
+`Save backup` writes to `Downloads/Kunai` via Android MediaStore and
+`Restore latest` imports the newest Kunai backup made on that device.
+The TV fallback does **not** discover files from other devices automatically.
+This is a **manual transfer path, not live cross-device sync**. Other
+independent desktop profiles, MAL data and provider histories are not
+silently overwritten or imported.
+
+### Source loading
+
+Home resolves Anime, Series and Movies separately with bounded waits, so a
+slow provider no longer holds the whole page behind a blocking spinner.
+Recent catalog data is kept in a device-local bounded disk cache, with stale
+fallback on a provider outage. Resolution and playback still use direct
+on-device HTTPS sources, not Mirai or Philipedia.
+
+## Verified 0.1.4 rollout
+
+The same SHA-256-verified 0.1.4 APK was installed on XGIMI, Nothing Phone 2,
+Echo Show 5, and the Mirai and Tachibana Waydroid instances. Android's package
+manager confirmed versionCode 5 / versionName 0.1.4 on XGIMI, phone and Echo.
+Both Waydroid app lists showed Kunai after installing that exact APK.
+
+On the actual XGIMI, the TV Settings screen displayed **4 watched episodes**.
+Tapping **Save backup** created a 3,848-byte JSON file in
+`/sdcard/Download/Kunai/kunai-library-20261122-180527.json`.
+Tapping **Restore latest** returned **Merged: 0 titles, 0 episodes**, a
+successful no-op with all four watched entries intact and no Android crash.
+This confirms the Android TV document-picker workaround works on real hardware.
 
 ## Remaining readiness gates
 
-1. Verify Android 0.1.1 controls and stable D-pad focus **on the projector**.
-2. Confirm physical projected video, actual speaker audio, subtitle selection,
-   buffering/recovery and seeking. SurfaceView screenshots can show black even
-   while the Android media session reports real playback.
-3. Verify phone portrait browsing, navigation, rotation and Media3 playback
-   without disrupting an active phone session.
-4. Test all-devices-off independence by disabling the optional external
-   integrations; the code and direct native catalog/player flow need no server,
-   but that complete outage test has not been run.
-5. Benchmark the projector's 2 GB memory budget, cold start and ANR behavior.
-6. Migrate local JSON preferences to Room/DataStore with tests, add optional
-   sync, and add network/provider-outage recovery tests.
-7. Sign and release a production APK only after the gates above pass. Do not
-   replace the existing Moonlight route until the native app is production-ready.
+1. Verify subtitles, real projector speaker output and visible projected
+   frames, buffering and remote seek across multiple providers. Video
+   SurfaceView screenshots are black even while Media3 state advances.
+2. Benchmark memory/ANRs and cold start on XGIMI's approximately 2 GB RAM.
+3. Test offline and provider-outage states plus corrupt/import-conflict cases.
+4. Implement **optional** authenticated cross-device live sync and a migration
+   from JSON preferences to Room/DataStore, if needed. Never make a central
+   server mandatory for playback. Desktop profiles and MAL should not be
+   silently overwritten by the Android library.
+5. Build a signed production artifact after these gates pass. The current
+   APKs are locally installed debug builds, not a publicly signed release.
+   Keep Moonlight and the desktop player as verified fallbacks.
 
-The original Bun CLI remains in `apps/cli` and unchanged. Mirai TV, Moonlight
-and the Nothing Phone projector remote remain in place and unaffected. The CI
-workflow builds/tests a debug APK when published on GitHub. Local commits are
-not themselves a public GitHub push or a release.
+Other platforms: OSIRIS macOS, iPad/iOS, and Quest 3 were offline during this
+run. An Android APK cannot be installed on iOS/macOS; those require an
+appropriate dedicated build/desktop frontend. No install or cross-device sync
+was claimed for those unavailable devices.
+
+Kunai's Bun CLI remains in `apps/cli`; its published providers and unrelated
+working-tree changes are intentionally untouched. The Android GitHub Actions
+workflow builds and tests a debug APK when it is pushed to GitHub. A local Git
+commit alone does not publish a new release or public changes.
