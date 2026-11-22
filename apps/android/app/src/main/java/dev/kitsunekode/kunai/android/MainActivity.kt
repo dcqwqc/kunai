@@ -559,8 +559,10 @@ class MainActivity : ComponentActivity() {
                 items(entries, key = { it.malId }) { entry ->
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Poster(entry.title, tv, Modifier.fillMaxWidth()) { onClick(entry.title) }
-                        val progress = if (entry.status == "Plan to Watch") "Plan to Watch" else
-                            entry.watched.toString() + " / " +
+                        val progress = if (entry.status == "Plan to Watch" &&
+                            entry.watched == 0) "Plan to Watch" else
+                            (if (entry.status == "Plan to Watch") "Plan · " else "") +
+                                entry.watched.toString() + " / " +
                                 (entry.episodes.takeIf { it > 0 }?.toString() ?: "?") + " watched"
                         KText(progress + if (entry.score > 0) " · " +
                             entry.score.toString() + "/10" else "",
@@ -692,6 +694,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun EpisodeCard(
     episode: Episode,
     poster: String,
+    watchedOnAniWorld: Boolean = false,
     onClick: () -> Unit,
 ) {
     var focused by remember(episode.number) { mutableStateOf(false) }
@@ -699,7 +702,8 @@ class MainActivity : ComponentActivity() {
         .onFocusChanged { focused = it.isFocused }
         .clip(round).background(Ember.panel)
         .border(if (focused) 3.dp else 1.dp,
-            if (focused) Ember.pink else Ember.border, round)
+            if (focused) Ember.pink else if (watchedOnAniWorld)
+                Ember.pink.copy(alpha = .65f) else Ember.border, round)
         .clickable(onClick = onClick).padding(9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -709,6 +713,8 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             KText("Episode ${episode.number}", color = Ember.pink, weight = FontWeight.Bold)
             KText(episode.name, size = 12.sp, maxLines = 2)
+            if (watchedOnAniWorld)
+                KText("✓ Watched on AniWorld", size = 11.sp, color = Ember.muted)
         }
     }
 }
@@ -779,6 +785,10 @@ class MainActivity : ComponentActivity() {
                         " watched" + if (malEntry.score > 0) " · Rated " +
                         malEntry.score + "/10" else "",
                         size = 12.sp, color = Ember.pink)
+                    if (malEntry.aniworld.isNotEmpty())
+                        KText("AniWorld watched · " +
+                            malEntry.aniworld.joinToString(" · ") { it.label() },
+                            size = 12.sp, color = Ember.muted)
                     FocusButton("Rate or edit on MAL", onClick = {
                         onOpenMal(malEntry.malId)
                     })
@@ -812,6 +822,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (title.kind != Kind.MOVIE) {
+            // A MAL season can correspond to only one AniWorld season here.
+            // Never mark overlapping episode numbers across ambiguous seasons.
+            val watchedNumbers = if (title.kind == Kind.ANIME &&
+                malEntry?.aniworld?.size == 1)
+                malEntry.aniworld.single().episodes.toSet() else emptySet()
             KText("Episodes", size = 20.sp, weight = FontWeight.Bold)
             when {
             busy -> KText("Loading episodes…", color = Ember.muted)
@@ -826,7 +841,10 @@ class MainActivity : ComponentActivity() {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             row.forEach { episode ->
                                 Box(Modifier.weight(1f)) {
-                                    EpisodeCard(episode, full.poster) { onPlay(full, episode) }
+                                    EpisodeCard(episode, full.poster,
+                                        watchedOnAniWorld = episode.number in watchedNumbers) {
+                                        onPlay(full, episode)
+                                    }
                                 }
                             }
                             if (row.size == 1) Spacer(Modifier.weight(1f))
@@ -834,7 +852,10 @@ class MainActivity : ComponentActivity() {
                     }
                 } else {
                     episodes.forEach { episode ->
-                        EpisodeCard(episode, full.poster) { onPlay(full, episode) }
+                        EpisodeCard(episode, full.poster,
+                            watchedOnAniWorld = episode.number in watchedNumbers) {
+                            onPlay(full, episode)
+                        }
                     }
                 }
             }

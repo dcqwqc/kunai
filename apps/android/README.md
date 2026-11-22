@@ -156,3 +156,21 @@ Java/Web XGIMI Remote app and the Kotlin/Compose standalone app into one
 source tree**; their independent remote-control and player capabilities remain
 preserved. The Android package keeps the same application ID and upgrades
 in place without clearing the local library.
+
+
+## Exact AniWorld history (0.1.6)
+
+The MAL library keeps status, ratings and progress independent from
+individual AniWorld watched events. Each MAL entry also carries the verified
+AniWorld season-and-episode bitmap in the owner's private offline bootstrap.
+Details show the exact watched episode ranges (including gaps), and episode
+cards mark only observed episodes. A MAL title with ambiguous mappings never
+marks another season's episodes. These bitmaps remain in the on-device cache
+after a direct public MAL status/score refresh.
+
+MAL represents only a contiguous numeric watched counter, not a per-episode
+bitmap. The companion authenticated, local-only sync on Tachibana updates
+counters from verified contiguous AniWorld history, without changing list
+category, rating or notes. Standalone Android needs no Tachibana server for
+playback or reading its existing offline bitmap, but the source bitmap updates
+only when a refreshed private bootstrap is installed or independently synced.

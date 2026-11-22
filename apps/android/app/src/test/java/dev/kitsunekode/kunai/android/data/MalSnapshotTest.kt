@@ -31,6 +31,23 @@ class MalSnapshotTest {
         assertEquals(1, profile.completed.size)
     }
 
+    @Test fun exactAniWorldHistoryNeverFillsEpisodeGaps() {
+        val season = WatchedSeason(1, listOf(9, 1, 2, 4, 5, 8, 9))
+        assertEquals("S1: E1–2, E4–5, E8–9", season.label())
+        assertFalse(season.contains(3))
+        assertTrue(season.contains(9))
+        assertEquals(7, season.count)
+    }
+
+    @Test fun seasonsAndSpecialsKeepDistinctEpisodeIdentity() {
+        val seasons = listOf(WatchedSeason(1, listOf(1, 2)),
+            WatchedSeason(2, listOf(1, 3)), WatchedSeason(0, listOf(1)))
+        assertEquals("S1: E1–2", seasons[0].label())
+        assertEquals("S2: E1, E3", seasons[1].label())
+        assertEquals("Specials: E1", seasons[2].label())
+        assertEquals("E1–3, E5", compactEpisodes(listOf(1, 2, 3, 5, 5)))
+    }
+
     @Test fun continuePrefersMoreRecentlyUpdatedEntries() {
         val profile = MalSnapshot("account", listOf(
             entry(1, "Watching", updated = 1), entry(2, "Watching", updated = 50),

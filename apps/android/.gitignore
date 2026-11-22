@@ -7,3 +7,6 @@
 *.log
 # Local build personalization, never commit the user's MAL library.
 /app/src/main/assets/kunai-personal.json.gz
+
+# Kotlin/Gradle worktree compilation cache.
+/.kotlin/

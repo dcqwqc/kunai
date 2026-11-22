@@ -9,6 +9,34 @@ import java.io.File
 import java.time.Instant
 import java.util.zip.GZIPInputStream
 
+data class WatchedSeason(val season: Int, val episodes: List<Int>) {
+    val count: Int get() = episodes.size
+    fun contains(episode: Int): Boolean = episode in episodes
+    fun label(): String = (if (season == 0) "Specials" else "S$season") +
+        ": " + compactEpisodes(episodes)
+}
+
+fun compactEpisodes(episodes: List<Int>): String {
+    val ordered = episodes.filter { it > 0 }.distinct().sorted()
+    if (ordered.isEmpty()) return ""
+    val parts = mutableListOf<String>()
+    var start = ordered.first()
+    var end = start
+    fun flush() {
+        parts += if (start == end) "E$start" else "E$start–$end"
+    }
+    for (episode in ordered.drop(1)) {
+        if (episode == end + 1) end = episode
+        else {
+            flush()
+            start = episode
+            end = episode
+        }
+    }
+    flush()
+    return parts.joinToString(", ")
+}
+
 data class MalEntry(
     val malId: Int,
     val title: Title,
@@ -19,6 +47,7 @@ data class MalEntry(
     val updatedAt: Long,
     val subscribed: Boolean,
     val watchlist: Boolean,
+    val aniworld: List<WatchedSeason> = emptyList(),
 )
 
 data class MalSuggestion(val title: Title, val reason: String, val malId: Int)
@@ -65,7 +94,25 @@ class MalProfile(context: Context) {
         // status/score updates or device-local watch positions.
         val originals = bootstrap.suggestions.associateBy { it.title.id }
         val owned = local.entries.mapTo(HashSet()) { it.malId }
-        return local.copy(suggestions = local.suggestions.mapNotNull { suggestion ->
+        val episodeHistory = bootstrap.entries.associateBy { it.malId }
+        val bootstrapIsNewer = runCatching {
+            Instant.parse(bootstrap.syncedAt).isAfter(Instant.parse(local.syncedAt))
+        }.getOrDefault(false)
+        return local.copy(
+            entries = local.entries.map { cached ->
+                val fromSource = episodeHistory[cached.malId]
+                val exact = fromSource?.aniworld.orEmpty()
+                val withHistory = cached.copy(
+                    aniworld = if (exact.isNotEmpty()) exact else cached.aniworld)
+                // A newer authenticated offline snapshot takes precedence over
+                // an older public MAL fetch, even before network connectivity.
+                if (bootstrapIsNewer && fromSource != null) withHistory.copy(
+                    status = fromSource.status,
+                    watched = fromSource.watched,
+                    score = fromSource.score,
+                ) else withHistory
+            },
+            suggestions = local.suggestions.mapNotNull { suggestion ->
             val restored = if (suggestion.malId > 0) suggestion
                 else originals[suggestion.title.id] ?: suggestion
             restored.takeIf { it.malId !in owned }
@@ -99,6 +146,19 @@ class MalProfile(context: Context) {
                     row.optLong("lastWatchedAt").coerceAtLeast(0L),
                     row.optBoolean("isSubscribed"),
                     row.optBoolean("onAniWorldWatchlist"),
+                    buildList {
+                        val source = row.optJSONArray("aniworld") ?: JSONArray()
+                        for (j in 0 until source.length()) {
+                            val coordinate = source.optJSONObject(j) ?: continue
+                            val season = coordinate.optInt("season", -1)
+                            if (season < 0 || season > 100) continue
+                            val raw = coordinate.optJSONArray("episodes") ?: continue
+                            val numbers = (0 until raw.length()).mapNotNull { n ->
+                                raw.optInt(n).takeIf { it in 1..1500 }
+                            }.distinct().sorted()
+                            if (numbers.isNotEmpty()) add(WatchedSeason(season, numbers))
+                        }
+                    },
                 ))
             }
         }.distinctBy { it.malId }
@@ -177,7 +237,14 @@ class MalProfile(context: Context) {
                 .put("onAniWorldWatchlist", old?.watchlist ?: false)
                 .put("lastWatchedAt", maxOf(old?.updatedAt ?: 0L,
                     row.optLong("updated_at").coerceAtLeast(0L)))
-                .put("year", old?.title?.year ?: JSONObject.NULL))
+                .put("year", old?.title?.year ?: JSONObject.NULL)
+                .put("aniworld", JSONArray().apply {
+                    old?.aniworld?.forEach { season ->
+                        put(JSONObject()
+                            .put("season", season.season)
+                            .put("episodes", JSONArray(season.episodes)))
+                    }
+                }))
         }
         val recommendations = JSONArray()
         for (rec in previous.suggestions) recommendations.put(JSONObject()
