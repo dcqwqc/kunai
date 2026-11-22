@@ -59,6 +59,14 @@
       "cache": false,
       "outputs": []
     },
+    // A cached mobile bundle loses POSIX executable mode when Turbo extracts
+    // artifacts under a restrictive umask (0700 instead of the required 0755).
+    // These tiny launchers must rebuild so the mode attestation stays correct.
+    "@kunai/mobile#build": {
+      "dependsOn": ["^typecheck", "typecheck"],
+      "cache": false,
+      "outputs": ["dist/android/**", "dist/ios/**", "dist/mobile-build-meta.json"]
+    },
     "@kunai/mobile#test": {
       "dependsOn": ["build"],
       "cache": false,
