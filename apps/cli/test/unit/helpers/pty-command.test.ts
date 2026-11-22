@@ -5,6 +5,8 @@ import { buildDarwinExpectScript, buildPtyCommand } from "../../helpers/pty-comm
 describe("PTY command", () => {
   test("uses util-linux script syntax on Linux", () => {
     expect(buildPtyCommand("exec bun cli.ts", "/tmp/cli.log", "linux")).toEqual([
+      "env",
+      "SHELL=/bin/sh",
       "script",
       "-qefc",
       "exec bun cli.ts",

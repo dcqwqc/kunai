@@ -21,7 +21,9 @@ export function buildPtyCommand(
   // fully buffers the log, so the file reads empty while the process is still
   // running — which reads exactly like "CLI never mounted" to a caller polling
   // the transcript for readiness.
-  return ["script", "-qefc", command, transcript];
+  // Util-linux script -c inherits SHELL. Fish does not understand the POSIX
+  // command syntax used by these harnesses. Use sh without changing login shell.
+  return ["env", "SHELL=/bin/sh", "script", "-qefc", command, transcript];
 }
 
 /** Escape a string for embedding inside a Tcl double-quoted word. */

@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,10 @@ import type { PersistentMpvSessionRuntime } from "@/infra/player/persistent-mpv-
 import { PersistentMpvSession } from "@/infra/player/PersistentMpvSession";
 import { DEFAULT_CONFIG } from "@/services/persistence/ConfigService";
 
-const MPV_BIN = Bun.which("mpv");
+// A desktop may shadow mpv on PATH with a GUI launcher such as Showtime.
+// The IPC integration suite must exercise the actual media player executable.
+const MPV_BIN =
+  process.platform === "linux" && existsSync("/usr/bin/mpv") ? "/usr/bin/mpv" : Bun.which("mpv");
 const mpvTest = MPV_BIN ? test : test.skip;
 
 function parseTlsObservations(output: string): string[] {
@@ -104,7 +108,7 @@ mpvTest("real mpv reuses one process across two local loadfile transitions", asy
         separator === -1
           ? [...command, ...headless]
           : [...command.slice(0, separator), ...headless, ...command.slice(separator)];
-      const child = Bun.spawn(cmd, options);
+      const child = Bun.spawn([MPV_BIN!, ...cmd.slice(1)], options);
       children.push(child);
       return child;
     },
@@ -210,7 +214,7 @@ for (const [startsExceptional, baseline] of [
           // build default (this mpv defaults to no); Kunai must restore it.
           const child = Bun.spawn(
             [
-              command[0]!,
+              MPV_BIN!,
               "--pause=yes",
               `--tls-verify=${baseline}`,
               "--force-window=no",
