@@ -580,7 +580,9 @@ class MainActivity : ComponentActivity() {
     upcoming: List<Upcoming>,
     busy: Boolean,
     problem: String,
+    savedCopy: Boolean,
     tv: Boolean,
+    onRetry: () -> Unit,
     onWeek: (LocalDate) -> Unit,
     onDay: (LocalDate) -> Unit,
     onOpen: (Title) -> Unit,
@@ -655,15 +657,29 @@ class MainActivity : ComponentActivity() {
                 dayEvents.size.toString() + if (dayEvents.size == 1) " episode" else " episodes",
                 size = 12.sp, color = Ember.muted)
         }
+        if (savedCopy && !busy) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                KText("Showing saved schedule", size = 12.sp, color = Ember.muted)
+                FocusButton("Refresh", onClick = onRetry)
+            }
+        }
         if (busy) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 LoadingState()
             }
         } else if (dayEvents.isEmpty() || problem.isNotEmpty()) {
-            Box(Modifier.fillMaxSize().padding(horizontal = 18.dp),
-                contentAlignment = Alignment.TopCenter) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 KText(problem.ifEmpty { "Nothing scheduled for this day." },
-                    color = Ember.muted, modifier = Modifier.padding(top = 20.dp))
+                    color = Ember.muted, align = TextAlign.Center)
+                if (problem.isNotBlank() && problem != "Select Anime to see release dates.") {
+                    FocusButton("Retry", onClick = onRetry)
+                }
             }
         } else {
             LazyVerticalGrid(columns = GridCells.Adaptive(if (tv) 145.dp else 125.dp),
@@ -972,6 +988,9 @@ class MainActivity : ComponentActivity() {
     var calendarDay by remember { mutableStateOf(LocalDate.now(localZone)) }
     var calendarLoading by remember { mutableStateOf(false) }
     var upcoming by remember { mutableStateOf<List<Upcoming>>(emptyList()) }
+    var calendarSavedCopy by remember { mutableStateOf(false) }
+    var calendarRetry by remember { mutableIntStateOf(0) }
+    var forceCalendarRefresh by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var libraryRevision by remember { mutableIntStateOf(0) }
@@ -1003,7 +1022,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    LaunchedEffect(page, search, kinds, calendarWeek) {
+    LaunchedEffect(page, search, kinds, calendarWeek, calendarDay, calendarRetry) {
+        val refreshRequested = forceCalendarRefresh
+        forceCalendarRefresh = false
         if (selected != null) return@LaunchedEffect
         if (search.length == 1) {
             items = emptyList()
@@ -1072,12 +1093,19 @@ class MainActivity : ComponentActivity() {
                 "Calendar" -> {
                     calendarLoading = true
                     try {
-                        val range = CalendarWeek.range(calendarWeek, localZone)
-                        upcoming = if (Kind.ANIME in kinds) {
-                            withTimeoutOrNull(12_000) {
-                                catalog.calendar(range.first, range.last + 1)
+                        // Fetch only the selected day. A weekly first page drops
+                        // late-week shows, and wastes AniList's request quota.
+                        val day = CalendarWeek.dayRange(calendarDay, localZone)
+                        if (Kind.ANIME in kinds) {
+                            val feed = withTimeoutOrNull(18_000) {
+                                catalog.calendar(day.first, day.last + 1, refreshRequested)
                             } ?: throw IllegalStateException("Calendar request timed out")
-                        } else emptyList()
+                            upcoming = feed.entries
+                            calendarSavedCopy = feed.savedCopy
+                        } else {
+                            upcoming = emptyList()
+                            calendarSavedCopy = false
+                        }
                     } finally {
                         calendarLoading = false
                     }
@@ -1251,7 +1279,11 @@ class MainActivity : ComponentActivity() {
                                     if (Kind.ANIME !in kinds) "Select Anime to see release dates."
                                     else ""
                                 },
-                                tv, ::changeCalendarWeek,
+                                calendarSavedCopy,
+                                tv, {
+                                    forceCalendarRefresh = true
+                                    calendarRetry++
+                                }, ::changeCalendarWeek,
                                 { calendarDay = it }, { selected = it })
                         page == "My List" ->
                             if (mal.entries.isNotEmpty() && Kind.ANIME in kinds) {
@@ -1278,7 +1310,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (!tv) BottomNavigation(page) { nav(it) }
-        if (error.isNotBlank() || resolving) {
+        // Calendar and Home already show request failures in their own content.
+        // Keep the bottom bar for playback and pages without an inline error.
+        if (resolving || (error.isNotBlank() &&
+                (selected != null || page !in setOf("Calendar", "Home")))) {
             Row(Modifier.fillMaxWidth().background(Ember.panel).padding(12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically

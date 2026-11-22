@@ -131,7 +131,6 @@ working-tree changes are intentionally untouched. The Android GitHub Actions
 workflow builds and tests a debug APK when it is pushed to GitHub. A local Git
 commit alone does not publish a new release or public changes.
 
-
 ## Calendar and navigation parity (0.1.5)
 
 The native Compose phone and TV surfaces now use the six Kunai navigation
@@ -148,15 +147,21 @@ boundaries include DST transitions. The app does not require the XGIMI remote,
 a TV connection, Mirai, or Philipedia to display the schedule. Only the Anime
 airing schedule is supported by this native data source; movie/TV premieres
 remain a separate discovery capability and are not misrepresented as anime
-episodes. When a request fails, an error appears instead of a false empty
-schedule.
+episodes. The native calendar requests the selected day's airing episodes so
+late-week releases are never discarded by AniList's first 50 weekly results.
+It follows pagination for days with more than 50 entries. Valid results are
+cached per day for ten minutes, and a saved copy up to fourteen days old is
+shown with an explicit refresh action if AniList is temporarily unavailable.
+When no saved copy exists, the calendar shows one inline error with Retry;
+it does not also display the same error in the global bottom bar.
+Local timezone boundaries include daylight-saving changes. When a request
+fails, an error appears instead of a false empty schedule.
 
 This aligns navigation and calendar behaviors but **does not merge the
 Java/Web XGIMI Remote app and the Kotlin/Compose standalone app into one
 source tree**; their independent remote-control and player capabilities remain
 preserved. The Android package keeps the same application ID and upgrades
 in place without clearing the local library.
-
 
 ## Exact AniWorld history (0.1.6)
 

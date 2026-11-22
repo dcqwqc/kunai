@@ -126,24 +126,85 @@ class Catalog(context: Context) {
         }
     }
 
-    suspend fun calendar(from: Long, until: Long): List<Upcoming> = withContext(Dispatchers.IO) {
+    data class CalendarFeed(val entries: List<Upcoming>, val savedCopy: Boolean)
+
+    /** A week remains available during a temporary AniList outage.
+     * Refreshes normally after ten minutes, and displays a saved-copy notice
+     * when falling back to a cached result no older than fourteen days.
+     */
+    suspend fun calendar(
+        from: Long,
+        until: Long,
+        forceRefresh: Boolean = false,
+    ): CalendarFeed = withContext(Dispatchers.IO) {
         require(from < until && until - from <= 15 * 86400L)
-        val query = "query(\$start:Int,\$end:Int){Page(page:1,perPage:50){airingSchedules(airingAt_greater:\$start,airingAt_lesser:\$end,sort:TIME){airingAt episode media{id title{english romaji userPreferred} coverImage{large} seasonYear isAdult}}}}"
-        val response = aniListQuery(query,
-            JSONObject().put("start", from.toInt()).put("end", until.toInt()))
-        val rows = response.optJSONObject("data")?.optJSONObject("Page")
-            ?.optJSONArray("airingSchedules") ?: return@withContext emptyList()
-        buildList {
+        val file = File(cacheRoot, "airing-$from-$until.json")
+        val now = System.currentTimeMillis()
+        val age = now - file.lastModified()
+        val saved = runCatching {
+            if (!file.isFile || file.length() !in 2..480_000 || age !in 0..1_209_600_000L)
+                return@runCatching null
+            val json = JSONArray(file.readText(Charsets.UTF_8))
+            if (json.length() > 200) return@runCatching null
+            buildList<Upcoming> {
+                for (i in 0 until json.length()) {
+                    val item = json.getJSONObject(i)
+                    val title = Library.decode(item.getJSONObject("title")) ?: error("Bad title")
+                    val ep = item.getInt("episode")
+                    val time = item.getLong("airingAt")
+                    check(title.kind == Kind.ANIME && ep in 1..5000 &&
+                        time >= from && time < until) { "Invalid saved schedule" }
+                    add(Upcoming(title, ep, time))
+                }
+            }
+        }.getOrNull()
+        if (!forceRefresh && saved != null && age < 600_000L) {
+            return@withContext CalendarFeed(saved, false)
+        }
+        try {
+            val fresh = fetchCalendar(from, until)
+            runCatching {
+                cacheRoot.mkdirs()
+                val json = JSONArray()
+                fresh.take(200).forEach { event ->
+                    json.put(JSONObject()
+                        .put("title", Library.encode(event.title))
+                        .put("episode", event.episode)
+                        .put("airingAt", event.airingAt))
+                }
+                val temp = File(cacheRoot, file.name + ".tmp")
+                temp.writeText(json.toString(), Charsets.UTF_8)
+                if (!temp.renameTo(file)) temp.delete()
+            }
+            CalendarFeed(fresh, false)
+        } catch (e: Exception) {
+            if (saved != null) CalendarFeed(saved, true) else throw e
+        }
+    }
+
+    private fun fetchCalendar(from: Long, until: Long): List<Upcoming> {
+        val found = mutableListOf<Upcoming>()
+        for (page in 1..4) {
+            val query = "query(\$start:Int,\$end:Int){Page(page:$page,perPage:50){pageInfo{hasNextPage} airingSchedules(airingAt_greater: \$start,airingAt_lesser: \$end,sort:TIME){airingAt episode media{id title{english romaji userPreferred} coverImage{large} seasonYear isAdult}}}}"
+            val response = aniListQuery(query,
+                JSONObject().put("start", from.toInt()).put("end", until.toInt()))
+            val pageData = response.optJSONObject("data")?.optJSONObject("Page")
+                ?: throw IllegalStateException("Calendar response did not contain a page")
+            val rows = pageData.optJSONArray("airingSchedules")
+                ?: throw IllegalStateException("Calendar response did not contain a schedule")
             for (i in 0 until rows.length()) {
                 val entry = rows.optJSONObject(i) ?: continue
                 val m = entry.optJSONObject("media") ?: continue
                 if (m.optBoolean("isAdult")) continue
-                val title = animeTitle(m)
                 val ep = entry.optInt("episode")
                 val time = entry.optLong("airingAt")
-                if (ep > 0 && time > 0) add(Upcoming(title, ep, time))
+                if (ep > 0 && time >= from && time < until) {
+                    found.add(Upcoming(animeTitle(m), ep, time))
+                }
             }
+            if (pageData.optJSONObject("pageInfo")?.optBoolean("hasNextPage") != true) break
         }
+        return found.distinctBy { Triple(it.title.id, it.episode, it.airingAt) }
     }
 
     private fun aniListQuery(query: String, variables: JSONObject = JSONObject()): JSONObject =
