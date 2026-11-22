@@ -48,6 +48,7 @@ import androidx.compose.ui.focus.*
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -62,6 +63,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withTimeoutOrNull
+import dev.kitsunekode.kunai.android.data.CalendarWeek
 import dev.kitsunekode.kunai.android.data.Catalog
 import dev.kitsunekode.kunai.android.data.Episode
 import dev.kitsunekode.kunai.android.data.Kaa
@@ -73,6 +75,10 @@ import dev.kitsunekode.kunai.android.data.MalSnapshot
 import dev.kitsunekode.kunai.android.data.Movy
 import dev.kitsunekode.kunai.android.data.Title
 import dev.kitsunekode.kunai.android.data.Upcoming
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -90,6 +96,16 @@ private object Ember {
 }
 private val round = RoundedCornerShape(12.dp)
 private val sections = listOf("Home", "Discover", "Calendar", "Continue", "My List", "Settings")
+// Exact icon shapes and navigation order from the shared Kunai TV remote UI.
+private fun navIcon(section: String) = when (section) {
+    "Home" -> R.drawable.ic_kunai_home
+    "Discover" -> R.drawable.ic_kunai_discover
+    "Calendar" -> R.drawable.ic_kunai_calendar
+    "Continue" -> R.drawable.ic_kunai_continue
+    "My List" -> R.drawable.ic_kunai_list
+    else -> R.drawable.ic_kunai_settings
+}
+
 private fun safeMessage(e: Throwable) = when {
     e.message.orEmpty().contains("429") -> "Catalog is rate-limited. Try again shortly."
     e.message.orEmpty().contains("HTTP") -> "Catalog temporarily unavailable."
@@ -407,26 +423,47 @@ class MainActivity : ComponentActivity() {
                 .clickable { onNavigate(item) }
                 .padding(vertical = 16.dp, horizontal = 13.dp)
             ) {
-                KText(item, size = 15.sp, weight = FontWeight.SemiBold,
-                    color = if (current == item) Ember.pink else Ember.text)
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                    androidx.compose.foundation.Image(
+                        painterResource(navIcon(item)), contentDescription = null,
+                        colorFilter = ColorFilter.tint(
+                            if (current == item) Ember.pink else Ember.muted),
+                        modifier = Modifier.size(21.dp))
+                    KText(item, size = 15.sp, weight = FontWeight.SemiBold,
+                        color = if (current == item) Ember.pink else Ember.text)
+                }
             }
         }
     }
 }
 
 @Composable private fun BottomNavigation(current: String, navigate: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth().background(Ember.sidebar).padding(vertical = 8.dp, horizontal = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        sections.forEach { name ->
-            Box(Modifier.weight(1f).clip(round)
-                .background(if (current == name) Color(0xFF2A2030) else Color.Transparent)
-                .clickable { navigate(name) }.padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                KText(name, size = 11.sp, weight = FontWeight.SemiBold,
-                    color = if (current == name) Ember.pink else Ember.muted,
-                    maxLines = 1)
+    // Same six native vector icons and order as the TV remote's Kunai sidebar.
+    BoxWithConstraints(Modifier.fillMaxWidth().background(Ember.sidebar)) {
+        val compact = maxWidth < 370.dp
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            sections.forEach { name ->
+                val active = current == name
+                Column(Modifier.weight(1f).height(58.dp)
+                    .clip(round)
+                    .background(if (active) Color(0xFF2A2030) else Color.Transparent)
+                    .clickable { navigate(name) }
+                    .padding(horizontal = 1.dp, vertical = 5.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    androidx.compose.foundation.Image(
+                        painterResource(navIcon(name)), contentDescription = null,
+                        colorFilter = ColorFilter.tint(if (active) Ember.pink else Ember.muted),
+                        modifier = Modifier.size(20.dp))
+                    KText(name, size = if (compact) 9.sp else 10.sp,
+                        weight = FontWeight.SemiBold,
+                        color = if (active) Ember.pink else Ember.muted,
+                        maxLines = 1)
+                }
             }
         }
     }
@@ -528,6 +565,123 @@ class MainActivity : ComponentActivity() {
                         KText(progress + if (entry.score > 0) " · " +
                             entry.score.toString() + "/10" else "",
                             size = 11.sp, color = Ember.muted, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun CalendarPage(
+    week: LocalDate,
+    selectedDay: LocalDate,
+    upcoming: List<Upcoming>,
+    busy: Boolean,
+    problem: String,
+    tv: Boolean,
+    onWeek: (LocalDate) -> Unit,
+    onDay: (LocalDate) -> Unit,
+    onOpen: (Title) -> Unit,
+) {
+    val zone = remember { ZoneId.systemDefault() }
+    val today = LocalDate.now(zone)
+    val days = CalendarWeek.days(week)
+    val todayWeek = CalendarWeek.monday(today)
+    val dayEvents = remember(upcoming, selectedDay) {
+        CalendarWeek.onDay(upcoming, selectedDay, zone)
+    }
+    val rangeLabel = week.format(DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())) +
+        " – " + days.last().format(DateTimeFormatter.ofPattern("d MMM", Locale.getDefault()))
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 9.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            KText("Schedule", size = 21.sp, weight = FontWeight.Bold)
+            FocusButton("This week", active = week == todayWeek,
+                onClick = { onWeek(todayWeek) })
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            FocusButton("‹", modifier = Modifier.width(42.dp),
+                onClick = { onWeek(week.minusWeeks(1)) })
+            KText(rangeLabel, modifier = Modifier.weight(1f), size = 15.sp,
+                weight = FontWeight.SemiBold, align = TextAlign.Center, maxLines = 1)
+            FocusButton("›", modifier = Modifier.width(42.dp),
+                onClick = { onWeek(week.plusWeeks(1)) })
+        }
+        // The full Monday–Sunday row always fits on screen. No horizontal
+        // scrolling, even in the phone's smallest supported text layout.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
+            days.forEach { date ->
+                val active = date == selectedDay
+                val isToday = date == today
+                val weekday = date.format(DateTimeFormatter.ofPattern("EEE", Locale.getDefault()))
+                    .trimEnd('.')
+                Column(Modifier.weight(1f).padding(horizontal = 2.dp)
+                    .height(58.dp).clip(round)
+                    .background(if (active) Ember.panelHover else Ember.panel)
+                    .border(if (isToday) 1.5.dp else 1.dp,
+                        if (active) Ember.pink else if (isToday)
+                            Ember.border.copy(alpha = .92f) else Ember.border.copy(alpha = .42f),
+                        round)
+                    .clickable { onDay(date) }
+                    .padding(vertical = 7.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    KText(weekday, size = if (tv) 11.sp else 10.sp,
+                        color = if (active) Ember.pink else Ember.muted,
+                        weight = FontWeight.SemiBold, maxLines = 1)
+                    KText(date.dayOfMonth.toString(), size = 14.sp,
+                        weight = FontWeight.Bold,
+                        color = if (active) Ember.pink else Ember.text)
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 7.dp,
+            bottom = 13.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            KText(selectedDay.format(DateTimeFormatter.ofPattern(
+                "EEEE, d MMMM", Locale.getDefault())), size = 16.sp,
+                weight = FontWeight.SemiBold)
+            if (dayEvents.isNotEmpty()) KText(
+                dayEvents.size.toString() + if (dayEvents.size == 1) " episode" else " episodes",
+                size = 12.sp, color = Ember.muted)
+        }
+        if (busy) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                LoadingState()
+            }
+        } else if (dayEvents.isEmpty() || problem.isNotEmpty()) {
+            Box(Modifier.fillMaxSize().padding(horizontal = 18.dp),
+                contentAlignment = Alignment.TopCenter) {
+                KText(problem.ifEmpty { "Nothing scheduled for this day." },
+                    color = Ember.muted, modifier = Modifier.padding(top = 20.dp))
+            }
+        } else {
+            LazyVerticalGrid(columns = GridCells.Adaptive(if (tv) 145.dp else 125.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 26.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(17.dp)
+            ) {
+                items(dayEvents, key = { it.title.id + ":" + it.episode }) { event ->
+                    Column(Modifier.fillMaxWidth().clickable { onOpen(event.title) },
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Artwork(event.title.poster, Modifier.fillMaxWidth().aspectRatio(.73f)
+                            .clip(round).background(Ember.panel))
+                        KText(event.title.name, weight = FontWeight.SemiBold, size = 12.sp,
+                            maxLines = 2)
+                        val time = Instant.ofEpochSecond(event.airingAt).atZone(zone)
+                            .format(DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()))
+                        KText("Episode " + event.episode + " · " + time,
+                            color = Ember.pink, size = 11.sp, maxLines = 1)
                     }
                 }
             }
@@ -792,6 +946,10 @@ class MainActivity : ComponentActivity() {
     var items by remember { mutableStateOf<List<Title>>(emptyList()) }
     var shelves by remember { mutableStateOf<Map<Kind, List<Title>>>(emptyMap()) }
     var featured by remember { mutableStateOf<Title?>(null) }
+    val localZone = remember { ZoneId.systemDefault() }
+    var calendarWeek by remember { mutableStateOf(CalendarWeek.monday(LocalDate.now(localZone))) }
+    var calendarDay by remember { mutableStateOf(LocalDate.now(localZone)) }
+    var calendarLoading by remember { mutableStateOf(false) }
     var upcoming by remember { mutableStateOf<List<Upcoming>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -824,14 +982,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    LaunchedEffect(page, search, kinds) {
+    LaunchedEffect(page, search, kinds, calendarWeek) {
         if (selected != null) return@LaunchedEffect
         if (search.length == 1) {
             items = emptyList()
             loading = false
             return@LaunchedEffect
         }
-        loading = page in setOf("Home", "Discover", "Calendar")
+        loading = page in setOf("Home", "Discover")
         error = ""
         try {
             if (search.isNotBlank()) {
@@ -891,10 +1049,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 "Calendar" -> {
-                    val today = System.currentTimeMillis() / 1000L
-                    upcoming = if (Kind.ANIME in kinds) withTimeoutOrNull(10_000) {
-                        catalog.calendar(today - 3600, today + 7 * 86400L)
-                    }.orEmpty() else emptyList()
+                    calendarLoading = true
+                    try {
+                        val range = CalendarWeek.range(calendarWeek, localZone)
+                        upcoming = if (Kind.ANIME in kinds) {
+                            withTimeoutOrNull(12_000) {
+                                catalog.calendar(range.first, range.last + 1)
+                            } ?: throw IllegalStateException("Calendar request timed out")
+                        } else emptyList()
+                    } finally {
+                        calendarLoading = false
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -902,6 +1067,14 @@ class MainActivity : ComponentActivity() {
         } finally {
             loading = false
         }
+    }
+
+    fun changeCalendarWeek(next: LocalDate) {
+        val nextMonday = CalendarWeek.monday(next)
+        val today = LocalDate.now(localZone)
+        if (!CalendarWeek.weekInRange(nextMonday, today)) return
+        calendarWeek = nextMonday
+        calendarDay = if (nextMonday == CalendarWeek.monday(today)) today else nextMonday
     }
 
     fun syncMalNow() {
@@ -1050,34 +1223,15 @@ class MainActivity : ComponentActivity() {
                                 if (error.isNotBlank()) item { KText(error, color = Ember.muted) }
                             }
                         page == "Calendar" ->
-                            LazyColumn(Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(18.dp),
-                                verticalArrangement = Arrangement.spacedBy(11.dp)
-                            ) {
-                                item { KText("This week", size = 21.sp, weight = FontWeight.Bold) }
-                                if (upcoming.isEmpty()) item {
-                                    KText(if (loading) "Loading calendar…" else
-                                        "No verified upcoming anime episodes this week.",
-                                        color = Ember.muted)
-                                }
-                                items(upcoming, key = { it.title.id + ":" + it.episode }) { event ->
-                                    Row(Modifier.fillMaxWidth().clip(round).background(Ember.panel)
-                                        .clickable { selected = event.title }.padding(10.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Artwork(event.title.poster, Modifier.width(76.dp).height(101.dp)
-                                            .clip(round))
-                                        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                            KText(event.title.name, weight = FontWeight.Bold)
-                                            KText("Episode ${event.episode}", color = Ember.pink)
-                                            KText(SimpleDateFormat("EEE, MMM d · HH:mm",
-                                                Locale.getDefault()).format(Date(event.airingAt * 1000)),
-                                                size = 12.sp, color = Ember.muted)
-                                        }
-                                    }
-                                }
-                            }
+                            CalendarPage(
+                                calendarWeek, calendarDay, upcoming,
+                                calendarLoading,
+                                error.ifEmpty {
+                                    if (Kind.ANIME !in kinds) "Select Anime to see release dates."
+                                    else ""
+                                },
+                                tv, ::changeCalendarWeek,
+                                { calendarDay = it }, { selected = it })
                         page == "My List" ->
                             if (mal.entries.isNotEmpty() && Kind.ANIME in kinds) {
                                 MalGridPage(mal, tv, malFilter, { malFilter = it },

@@ -130,3 +130,29 @@ Kunai's Bun CLI remains in `apps/cli`; its published providers and unrelated
 working-tree changes are intentionally untouched. The Android GitHub Actions
 workflow builds and tests a debug APK when it is pushed to GitHub. A local Git
 commit alone does not publish a new release or public changes.
+
+
+## Calendar and navigation parity (0.1.5)
+
+The native Compose phone and TV surfaces now use the six Kunai navigation
+icons and order from `XGIMIRemote/bin/kunai-tv-ui.html`: Home, Discover,
+Calendar, Continue, My List and Settings. The Android drawables contain the
+same vector path geometry as Kunai's existing web/remote UI, instead of relying
+on generic platform icons or an external font at runtime.
+
+The schedule reproduces the remote calendar's fixed-width Monday–Sunday day
+row, selected date, localized date labels, previous/next week navigation, and
+This week shortcut. It shows cover-first anime release tiles and their episode
+numbers/times, using AniList directly on the Android device. Local timezone
+boundaries include DST transitions. The app does not require the XGIMI remote,
+a TV connection, Mirai, or Philipedia to display the schedule. Only the Anime
+airing schedule is supported by this native data source; movie/TV premieres
+remain a separate discovery capability and are not misrepresented as anime
+episodes. When a request fails, an error appears instead of a false empty
+schedule.
+
+This aligns navigation and calendar behaviors but **does not merge the
+Java/Web XGIMI Remote app and the Kotlin/Compose standalone app into one
+source tree**; their independent remote-control and player capabilities remain
+preserved. The Android package keeps the same application ID and upgrades
+in place without clearing the local library.
