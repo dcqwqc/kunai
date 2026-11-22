@@ -15,9 +15,17 @@ Node, Bun, Python, Termux, Moonlight, Mirai, or Philipedia.
 - **Resolvers:** Kotlin port of the existing KickAssAnime provider contract and
   Movy's encrypted source contract. Both fail closed when streams cannot be
   verified, rather than launching a wrong title or pretending to play.
-- **Local library:** My List and last-watch position remain on the Android
-  device. Storage is currently JSON in private SharedPreferences; migrating to
-  Room/DataStore remains planned.
+- **MyAnimeList library:** The native app reads the configured MAL account's
+  public list directly over HTTPS, keeps a private offline cache, and shows
+  Watching, Plan to Watch, Completed, Subscribed and Watchlist without any
+  desktop or home server. The local personalized bootstrap is included only
+  in the owner's privately built APK; it is gitignored and must never be
+  published to GitHub. The initial personalized recommendations are based on
+  MAL ratings and stay cached offline.
+- **Local playback:** Local favorites, per-episode progress and backups remain
+  separately in private SharedPreferences. They are never overwritten by the
+  MAL cache. Editing MAL scores and list membership currently opens the MAL
+  web editor; native in-app MAL OAuth write access remains future work.
 - **Optional integrations:** cross-device sync and projector remote controls
   must stay optional, never a prerequisite to browse or play.
 
@@ -69,9 +77,12 @@ On Android TV firmware without the document-picker app, such as this XGIMI,
 `Save backup` writes to `Downloads/Kunai` via Android MediaStore and
 `Restore latest` imports the newest Kunai backup made on that device.
 The TV fallback does **not** discover files from other devices automatically.
-This is a **manual transfer path, not live cross-device sync**. Other
-independent desktop profiles, MAL data and provider histories are not
-silently overwritten or imported.
+This backup process transfers only local playback data. The MAL library
+is independently downloaded and cached on each Android device; it is never
+mixed into the local backup or silently written back to MAL. MAL reading
+requires the account's list to remain publicly readable. If it is private
+or unavailable, the last verified offline copy stays visible. Playback
+and local favorites never depend on the sync service.
 
 ### Source loading
 

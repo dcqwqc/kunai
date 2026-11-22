@@ -67,6 +67,9 @@ import dev.kitsunekode.kunai.android.data.Episode
 import dev.kitsunekode.kunai.android.data.Kaa
 import dev.kitsunekode.kunai.android.data.Kind
 import dev.kitsunekode.kunai.android.data.Library
+import dev.kitsunekode.kunai.android.data.MalEntry
+import dev.kitsunekode.kunai.android.data.MalProfile
+import dev.kitsunekode.kunai.android.data.MalSnapshot
 import dev.kitsunekode.kunai.android.data.Movy
 import dev.kitsunekode.kunai.android.data.Title
 import dev.kitsunekode.kunai.android.data.Upcoming
@@ -95,6 +98,10 @@ private fun safeMessage(e: Throwable) = when {
 
 class MainActivity : ComponentActivity() {
     private var libraryRefresh by mutableIntStateOf(0)
+    override fun onResume() {
+        super.onResume()
+        libraryRefresh++
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val tv = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) ==
@@ -464,6 +471,70 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable private fun MalGridPage(
+    profile: MalSnapshot,
+    tv: Boolean,
+    filter: String,
+    onFilter: (String) -> Unit,
+    onClick: (Title) -> Unit,
+    showFilters: Boolean = true,
+    recentIds: Set<String> = emptySet(),
+) {
+    val labels = listOf("Watching", "Plan to Watch", "Completed", "All", "Subscribed", "Watchlist")
+    val entries = when (filter) {
+        "Watching" -> profile.watching.sortedWith(
+            compareByDescending<MalEntry> { it.title.id in recentIds }
+                .thenByDescending { it.updatedAt })
+        "Plan to Watch" -> profile.planned
+        "Completed" -> profile.completed
+        "Subscribed" -> profile.subscribed
+        "Watchlist" -> profile.watchlist
+        else -> profile.entries.sortedBy { it.title.name }
+    }
+    Column(Modifier.fillMaxSize()) {
+        if (showFilters) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                labels.forEach { label ->
+                    FocusButton(label, active = filter == label, onClick = { onFilter(label) })
+                }
+            }
+        }
+        KText(if (profile.account.isNotBlank())
+            entries.size.toString() + " anime · MyAnimeList @" + profile.account
+            else "Connect MyAnimeList to see your anime",
+            size = 12.sp, color = Ember.muted,
+            modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 13.dp))
+        if (entries.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                KText("No anime in this list yet.", color = Ember.muted)
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(if (tv) 145.dp else 125.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(15.dp),
+            ) {
+                items(entries, key = { it.malId }) { entry ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Poster(entry.title, tv, Modifier.fillMaxWidth()) { onClick(entry.title) }
+                        val progress = if (entry.status == "Plan to Watch") "Plan to Watch" else
+                            entry.watched.toString() + " / " +
+                                (entry.episodes.takeIf { it > 0 }?.toString() ?: "?") + " watched"
+                        KText(progress + if (entry.score > 0) " · " +
+                            entry.score.toString() + "/10" else "",
+                            size = 11.sp, color = Ember.muted, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable private fun EpisodeCard(
     episode: Episode,
     poster: String,
@@ -498,6 +569,9 @@ class MainActivity : ComponentActivity() {
     onSaved: () -> Unit,
     onPlay: (Title, Episode) -> Unit,
     onTrailer: (String) -> Unit,
+    malEntry: MalEntry?,
+    malSuggestion: Boolean,
+    onOpenMal: (Int) -> Unit,
 ) {
     var full by remember(title.id) { mutableStateOf(title) }
     var episodes by remember(title.id) { mutableStateOf<List<Episode>>(emptyList()) }
@@ -545,8 +619,20 @@ class MainActivity : ComponentActivity() {
                     KText(full.description, size = 13.sp, color = Color(0xFFE1D4DD),
                         maxLines = if (tv) 5 else 4)
                 }
+                if (malEntry != null) {
+                    KText(malEntry.status + " · " + malEntry.watched + " / " +
+                        (malEntry.episodes.takeIf { it > 0 }?.toString() ?: "?") +
+                        " watched" + if (malEntry.score > 0) " · Rated " +
+                        malEntry.score + "/10" else "",
+                        size = 12.sp, color = Ember.pink)
+                    FocusButton("Rate or edit on MAL", onClick = {
+                        onOpenMal(malEntry.malId)
+                    })
+                } else if (malSuggestion) {
+                    KText("Recommended for you", size = 12.sp, color = Ember.pink)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    FocusButton(if (saved) "✓ My List" else "+ My List",
+                    FocusButton(if (saved) "✓ Saved locally" else "+ Save locally",
                         active = saved, onClick = {
                             library.toggle(title)
                             saved = library.has(title)
@@ -629,34 +715,56 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun LibrarySettings(
     library: Library,
+    profile: MalSnapshot,
     tv: Boolean,
+    syncing: Boolean,
+    syncError: String,
+    onSync: () -> Unit,
+    onOpenMal: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-        .padding(horizontal = 24.dp, vertical = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        .padding(horizontal = 24.dp, vertical = 25.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        KText("Library", size = 24.sp, weight = FontWeight.Bold)
-        KText("${library.saved().size} saved titles · ${library.recent().size} watched episodes",
-            color = Ember.muted, size = 13.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        KText("MyAnimeList", size = 24.sp, weight = FontWeight.Bold)
+        if (profile.entries.isNotEmpty()) {
+            KText("@" + profile.account + " · " + profile.entries.size +
+                " anime", color = Ember.text, size = 15.sp)
+            KText(profile.watching.size.toString() + " Watching · " +
+                profile.planned.size + " Plan to Watch · " +
+                profile.completed.size + " Completed",
+                color = Ember.muted, size = 12.sp)
+            KText("Saved offline · last checked " + profile.syncedAt.take(16)
+                .replace("T", " "), color = Ember.muted, size = 12.sp)
+        } else {
+            KText("No MAL account cached. Import or connect a library to get started.",
+                color = Ember.muted, size = 13.sp)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FocusButton(if (syncing) "Syncing…" else "Sync now", primary = true,
+                onClick = onSync)
+            FocusButton("Open MyAnimeList", onClick = onOpenMal)
+        }
+        if (syncError.isNotBlank()) KText(syncError, color = Ember.muted, size = 12.sp)
+        Spacer(Modifier.height(9.dp))
+        KText("Local playback", size = 18.sp, weight = FontWeight.SemiBold)
+        KText(library.saved().size.toString() + " locally saved · " +
+            library.recent().size + " playback positions",
+            color = Ember.muted, size = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             FocusButton(if (tv) "Save backup" else "Export",
-                primary = true, onClick = onExport)
+                onClick = onExport)
             FocusButton(if (tv) "Restore latest" else "Import & merge",
                 onClick = onImport)
         }
-        KText(
-            if (tv) "Backups save to Downloads/Kunai on this device. " +
-                "Restore latest merges the most recent backup saved here. " +
-                "Nothing is deleted, and playback never needs a server."
-            else "Transfer your saved titles and watch positions with a library file. " +
-                "Import adds missing titles and keeps the newer watch position. " +
-                "Nothing is deleted, and playback never needs a server.",
-            color = Ember.muted, size = 13.sp)
-        Spacer(Modifier.height(13.dp))
-        KText("Kunai", size = 17.sp, weight = FontWeight.SemiBold)
-        KText("0.1.4 · Native Android TV & phone", color = Ember.muted, size = 12.sp)
+        KText("Local backups preserve offline favorites and playback positions. " +
+            "Your MAL library is cached separately and syncs directly when online. " +
+            "Watching does not depend on a desktop or home server.",
+            color = Ember.muted, size = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        KText("Kunai · Native Android TV & phone", color = Ember.muted, size = 12.sp)
     }
 }
 
@@ -671,6 +779,11 @@ class MainActivity : ComponentActivity() {
     val kaa = remember { Kaa() }
     val movy = remember { Movy() }
     val library = remember { Library(host) }
+    val malData = remember { MalProfile(host) }
+    var mal by remember { mutableStateOf(malData.cached()) }
+    var malSyncing by remember { mutableStateOf(false) }
+    var malError by remember { mutableStateOf("") }
+    var malFilter by remember { mutableStateOf("Watching") }
     val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf("Home") }
     var search by remember { mutableStateOf("") }
@@ -684,6 +797,24 @@ class MainActivity : ComponentActivity() {
     var error by remember { mutableStateOf("") }
     var libraryRevision by remember { mutableIntStateOf(0) }
     var resolving by remember { mutableStateOf(false) }
+
+    // Direct-to-MAL refresh. All navigation and offline playback use the cached
+    // snapshot if MyAnimeList is unreachable. No other device is required.
+    LaunchedEffect(externalLibraryRevision) {
+        if (mal.entries.isEmpty()) return@LaunchedEffect
+        while (true) {
+            malSyncing = true
+            try {
+                mal = malData.refresh(mal)
+                malError = ""
+            } catch (e: Exception) {
+                malError = "Offline library shown · MAL refresh unavailable"
+            } finally {
+                malSyncing = false
+            }
+            delay(600_000L)
+        }
+    }
 
     BackHandler(enabled = selected != null || page != "Home" || search.isNotEmpty()) {
         when {
@@ -706,7 +837,9 @@ class MainActivity : ComponentActivity() {
             if (search.isNotBlank()) {
                 val term = search
                 delay(240)
-                items = emptyList()
+                items = mal.entries.asSequence()
+                    .filter { it.title.name.contains(term, ignoreCase = true) }
+                    .map { it.title }.take(50).toList()
                 coroutineScope {
                     Kind.entries.filter { it in kinds }.map { kind ->
                         launch {
@@ -771,6 +904,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    fun syncMalNow() {
+        if (malSyncing || mal.entries.isEmpty()) return
+        scope.launch {
+            malSyncing = true
+            try {
+                mal = malData.refresh(mal)
+                malError = ""
+            } catch (e: Exception) {
+                malError = "MAL is unavailable. Your offline library is unchanged."
+            } finally {
+                malSyncing = false
+            }
+        }
+    }
+    fun openMal(id: Int? = null) {
+        val account = mal.account.takeIf { it.matches(Regex("[A-Za-z0-9_-]{2,40}")) }
+            ?: return
+        val url = if (id != null && id > 0)
+            "https://myanimelist.net/ownlist/anime/" + id + "/edit"
+        else "https://myanimelist.net/animelist/" + account
+        runCatching { host.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { malError = "No app could open MyAnimeList." }
+    }
+
     fun nav(next: String) {
         selected = null
         page = next
@@ -801,7 +958,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Ember.bg)) {
+    Column(Modifier.fillMaxSize().background(Ember.bg)
+        .statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.weight(1f)) {
             if (tv) SideNavigation(page) { nav(it) }
             Column(Modifier.weight(1f)) {
@@ -814,10 +972,17 @@ class MainActivity : ComponentActivity() {
                         onClose = { selected = null },
                         onSaved = { libraryRevision++ },
                         onPlay = ::play,
-                        onTrailer = ::trailer)
+                        onTrailer = ::trailer,
+                        malEntry = mal.entries.firstOrNull {
+                            it.title.id == selected!!.id && it.title.kind == selected!!.kind
+                        },
+                        malSuggestion = mal.suggestions.any { it.title.id == selected!!.id },
+                        onOpenMal = { openMal(it) })
                 } else {
                     when {
-                        page == "Settings" -> LibrarySettings(library, tv, onExport, onImport)
+                        page == "Settings" -> LibrarySettings(library, mal, tv,
+                            malSyncing, malError, ::syncMalNow,
+                            { openMal() }, onExport, onImport)
                         loading && items.isEmpty() && shelves.isEmpty() ->
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 LoadingState()
@@ -856,6 +1021,23 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     }
+                                }
+                                if (Kind.ANIME in kinds && mal.watching.isNotEmpty()) item {
+                                    Shelf("Continue watching", mal.watching.take(20).map { it.title },
+                                        tv, { selected = it }, { page = "Continue" })
+                                }
+                                if (Kind.ANIME in kinds && mal.suggestions.isNotEmpty()) item {
+                                    Shelf("For you", mal.suggestions.map { it.title },
+                                        tv, { selected = it }, {
+                                            page = "Discover"
+                                            items = mal.suggestions.map { it.title }
+                                        })
+                                }
+                                if (Kind.ANIME in kinds && mal.planned.isNotEmpty()) item {
+                                    Shelf("Plan to Watch", mal.planned.take(20).map { it.title },
+                                        tv, { selected = it }, {
+                                            page = "My List"; malFilter = "Plan to Watch"
+                                        })
                                 }
                                 Kind.entries.filter { it in kinds }.forEach { kind ->
                                     val rows = shelves[kind].orEmpty()
@@ -897,12 +1079,25 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         page == "My List" ->
-                            TitleGrid(remember(libraryRevision, externalLibraryRevision) { library.saved() }
-                                .filter { it.kind in kinds }, tv) { selected = it }
+                            if (mal.entries.isNotEmpty() && Kind.ANIME in kinds) {
+                                MalGridPage(mal, tv, malFilter, { malFilter = it },
+                                    { selected = it })
+                            } else {
+                                TitleGrid(remember(libraryRevision, externalLibraryRevision) {
+                                    library.saved()
+                                }.filter { it.kind in kinds }, tv) { selected = it }
+                            }
                         page == "Continue" ->
-                            TitleGrid(remember(libraryRevision, externalLibraryRevision) { library.recent().map { it.title }
-                                .distinctBy { entry -> entry.kind to entry.id } }
-                                .filter { it.kind in kinds }, tv) { selected = it }
+                            if (mal.watching.isNotEmpty() && Kind.ANIME in kinds) {
+                                MalGridPage(mal, tv, "Watching", {}, { selected = it },
+                                    showFilters = false,
+                                    recentIds = library.recent().map { it.title.id }.toSet())
+                            } else {
+                                TitleGrid(remember(libraryRevision, externalLibraryRevision) {
+                                    library.recent().map { it.title }
+                                        .distinctBy { entry -> entry.kind to entry.id }
+                                }.filter { it.kind in kinds }, tv) { selected = it }
+                            }
                     }
                 }
             }
