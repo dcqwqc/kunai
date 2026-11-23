@@ -23,6 +23,10 @@ object CalendarWeek {
         return start until endExclusive
     }
 
+    fun dayRange(day: LocalDate, zone: ZoneId): LongRange =
+        day.atStartOfDay(zone).toEpochSecond() until
+            day.plusDays(1).atStartOfDay(zone).toEpochSecond()
+
     fun onDay(events: List<Upcoming>, day: LocalDate, zone: ZoneId): List<Upcoming> =
         events.filter { row ->
             row.airingAt > 0 &&

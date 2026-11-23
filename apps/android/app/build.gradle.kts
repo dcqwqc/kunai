@@ -5,12 +5,35 @@ plugins {
 android {
     namespace = "dev.kitsunekode.kunai.android"
     compileSdk = 37
+    // A caller may select an existing debug signing identity to upgrade
+    // installed development APKs without wiping their private device data.
+    // Never create a new keystore as a silent fallback for that operation.
+    signingConfigs {
+        getByName("debug") {
+            // Prefer the established XDG debug identity if present. It signs
+            // existing owner installs on Mirai; ordinary contributors without
+            // that file still use their normal Android debug keystore.
+            val xdg = System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() }
+                ?: System.getProperty("user.home") + "/.config"
+            val existing = providers.gradleProperty("kunaiDebugKeystore").orNull
+                ?: file("$xdg/.android/debug.keystore")
+                    .takeIf { it.isFile }?.absolutePath
+            existing?.let { selected ->
+                val key = file(selected)
+                require(key.isFile) { "Kunai debug signing keystore does not exist" }
+                storeFile = key
+                storePassword = "android"
+                keyAlias = "AndroidDebugKey"
+                keyPassword = "android"
+            }
+        }
+    }
     defaultConfig {
         applicationId = "dev.kitsunekode.kunai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.1.6"
+        versionCode = 15
+        versionName = "0.1.14"
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {

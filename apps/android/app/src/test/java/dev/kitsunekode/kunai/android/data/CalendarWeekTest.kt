@@ -23,6 +23,13 @@ class CalendarWeekTest {
         assertEquals(7 * 86400 - 3600L, range.last - range.first + 1)
     }
 
+    @Test fun selectedDayRequestHonorsDstBoundaries() {
+        val spring = CalendarWeek.dayRange(LocalDate.of(2026, 3, 29), berlin)
+        val autumn = CalendarWeek.dayRange(LocalDate.of(2026, 10, 25), berlin)
+        assertEquals(23 * 3600L, spring.last - spring.first + 1)
+        assertEquals(25 * 3600L, autumn.last - autumn.first + 1)
+    }
+
     @Test fun forwardBackLimitsMatchRemoteSchedule() {
         val today = LocalDate.of(2026, 11, 22)
         val current = CalendarWeek.monday(today)

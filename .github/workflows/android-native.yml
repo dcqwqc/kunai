@@ -28,11 +28,24 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # Hosted Ubuntu runners already include Android SDK command-line tools.
+      # setup-android@v3 currently invokes the removed `sdkmanager tools` package
+      # and fails before Gradle starts; use the installed sdkmanager directly.
       - name: Install Android SDK
+        shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null
-          sdkmanager "platforms;android-37.0" "build-tools;36.0.0"
+          set -euo pipefail
+          : "${ANDROID_HOME:?Android SDK is required on the runner}"
+          sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager_bin" ]]; then
+            sdkmanager_bin="$(command -v sdkmanager || true)"
+          fi
+          if [[ ! -x "$sdkmanager_bin" ]]; then
+            sdkmanager_bin="$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
+          fi
+          test -x "$sdkmanager_bin"
+          "$sdkmanager_bin" --licenses < <(yes) > /dev/null
+          "$sdkmanager_bin" --channel=3 "platforms;android-37.0" "build-tools;36.0.0"
       - uses: gradle/actions/setup-gradle@v4
       - name: Build and run native unit tests
         working-directory: apps/android

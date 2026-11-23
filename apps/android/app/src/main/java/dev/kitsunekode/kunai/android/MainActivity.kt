@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -65,6 +66,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.kitsunekode.kunai.android.data.CalendarWeek
 import dev.kitsunekode.kunai.android.data.Catalog
+import dev.kitsunekode.kunai.android.data.CatalogIdentity
 import dev.kitsunekode.kunai.android.data.Episode
 import dev.kitsunekode.kunai.android.data.Kaa
 import dev.kitsunekode.kunai.android.data.Kind
@@ -95,7 +97,8 @@ private object Ember {
     val muted = Color(0xFFAB9DAC)
 }
 private val round = RoundedCornerShape(12.dp)
-private val sections = listOf("Home", "Discover", "Calendar", "Continue", "My List", "Settings")
+private val LocalPosterActions = compositionLocalOf<(Title) -> Unit> { {} }
+private val sections = listOf("Home", "Calendar", "Settings")
 // Exact icon shapes and navigation order from the shared Kunai TV remote UI.
 private fun navIcon(section: String) = when (section) {
     "Home" -> R.drawable.ic_kunai_home
@@ -112,14 +115,75 @@ private fun safeMessage(e: Throwable) = when {
     else -> "Could not load catalog. Check the internet connection."
 }
 
+/** Fixed episode selection sent by the authenticated phone remote.
+ * No media URLs, files, or arbitrary commands are accepted through intents.
+ */
+private data class NativeEpisodeRequest(
+    val kind: Kind, val id: String, val title: String,
+    val season: Int, val episode: Int, val year: Int?,
+)
+
+private fun nativeTitleKey(text: String): String =
+    text.lowercase(Locale.ROOT).replace(Regex("""[^\p{L}\p{N}]"""), "")
+
 class MainActivity : ComponentActivity() {
     private var libraryRefresh by mutableIntStateOf(0)
+    private var nativeEpisodeRequest: NativeEpisodeRequest? = null
+    private var nativeEpisodeRequestVersion by mutableIntStateOf(0)
+    private var nativeResumeRequest by mutableIntStateOf(0)
+
+    private fun acceptResumeIntent(value: Intent?) {
+        // Only explicit user actions start a video. The phone remote may pass a
+        // validated title and episode, but no stream URLs or executable actions.
+        if (value == null) return
+        val requestedId = value.getStringExtra("kunai_play_id")
+        if (requestedId != null) {
+            val kind = Kind.entries.firstOrNull {
+                it.key == value.getStringExtra("kunai_play_kind")
+            }
+            val name = runCatching {
+                String(android.util.Base64.decode(
+                    value.getStringExtra("kunai_play_title64").orEmpty(),
+                    android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or
+                        android.util.Base64.NO_WRAP), Charsets.UTF_8)
+            }.getOrDefault("").trim()
+            val season = value.getIntExtra("kunai_play_season", 1)
+            val ep = value.getIntExtra("kunai_play_episode", 1)
+            val year = value.getIntExtra("kunai_play_year", 0)
+            if (kind != null && requestedId.matches(Regex("[a-z0-9][a-z0-9-]{0,110}")) &&
+                name.length in 2..150 && name.none { it.code < 32 } &&
+                season in 0..100 && ep in 1..1500 && year in 0..2200) {
+                nativeEpisodeRequest = NativeEpisodeRequest(
+                    kind, requestedId, name, season, ep, year.takeIf { it > 0 })
+                nativeEpisodeRequestVersion++
+            }
+            value.removeExtra("kunai_play_id")
+            value.removeExtra("kunai_play_kind")
+            value.removeExtra("kunai_play_title64")
+            value.removeExtra("kunai_play_season")
+            value.removeExtra("kunai_play_episode")
+            value.removeExtra("kunai_play_year")
+            return
+        }
+        // Ordinary Home and BACK do not start playback.
+        if (value.getBooleanExtra("kunai_resume", false)) {
+            value.removeExtra("kunai_resume")
+            nativeResumeRequest++
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        acceptResumeIntent(intent)
+    }
     override fun onResume() {
         super.onResume()
         libraryRefresh++
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        acceptResumeIntent(intent)
         val tv = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) ==
             Configuration.UI_MODE_TYPE_TELEVISION ||
             packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
@@ -137,7 +201,8 @@ class MainActivity : ComponentActivity() {
             if (uri != null) importFromUri(uri)
         }
         setContent {
-            KunaiApp(this, tv, libraryRefresh,
+            KunaiApp(this, tv, libraryRefresh, nativeResumeRequest,
+                nativeEpisodeRequestVersion, nativeEpisodeRequest,
                 onExport = {
                     if (tv && Build.VERSION.SDK_INT >= 29) backupToDownloads()
                     else export.launch("kunai-library.json")
@@ -279,6 +344,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable private fun Poster(
     item: Title,
     tv: Boolean,
@@ -286,9 +352,13 @@ class MainActivity : ComponentActivity() {
     onClick: () -> Unit,
 ) {
     var focused by remember(item.id) { mutableStateOf(false) }
+    val openMenu = LocalPosterActions.current
     Column(modifier
         .onFocusChanged { focused = it.isFocused }
-        .clickable { onClick() }
+        .combinedClickable(
+            onClick = onClick,
+            onLongClick = { openMenu(item) },
+        )
         .padding(1.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
@@ -439,7 +509,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun BottomNavigation(current: String, navigate: (String) -> Unit) {
-    // Same six native vector icons and order as the TV remote's Kunai sidebar.
+    // One concise Home-first hierarchy on TV and phone.
     BoxWithConstraints(Modifier.fillMaxWidth().background(Ember.sidebar)) {
         val compact = maxWidth < 370.dp
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp),
@@ -483,7 +553,8 @@ class MainActivity : ComponentActivity() {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(13.dp),
             contentPadding = PaddingValues(end = 16.dp)
         ) {
-            items(titles.take(20), key = { it.kind.key + it.id }) { item ->
+            items(CatalogIdentity.distinct(titles).take(20),
+                key = { it.kind.key + it.id }) { item ->
                 Poster(item, tv, modifier = Modifier.width(if (tv) 147.dp else 128.dp)) {
                     onClick(item)
                 }
@@ -502,7 +573,7 @@ class MainActivity : ComponentActivity() {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(15.dp)
     ) {
-        items(titles, key = { it.kind.key + it.id }) {
+        items(CatalogIdentity.distinct(titles), key = { it.kind.key + it.id }) {
             Poster(it, tv, Modifier.fillMaxWidth()) { onClick(it) }
         }
     }
@@ -580,7 +651,9 @@ class MainActivity : ComponentActivity() {
     upcoming: List<Upcoming>,
     busy: Boolean,
     problem: String,
+    savedCopy: Boolean,
     tv: Boolean,
+    onRetry: () -> Unit,
     onWeek: (LocalDate) -> Unit,
     onDay: (LocalDate) -> Unit,
     onOpen: (Title) -> Unit,
@@ -588,7 +661,6 @@ class MainActivity : ComponentActivity() {
     val zone = remember { ZoneId.systemDefault() }
     val today = LocalDate.now(zone)
     val days = CalendarWeek.days(week)
-    val todayWeek = CalendarWeek.monday(today)
     val dayEvents = remember(upcoming, selectedDay) {
         CalendarWeek.onDay(upcoming, selectedDay, zone)
     }
@@ -600,8 +672,6 @@ class MainActivity : ComponentActivity() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             KText("Schedule", size = 21.sp, weight = FontWeight.Bold)
-            FocusButton("This week", active = week == todayWeek,
-                onClick = { onWeek(todayWeek) })
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -655,15 +725,29 @@ class MainActivity : ComponentActivity() {
                 dayEvents.size.toString() + if (dayEvents.size == 1) " episode" else " episodes",
                 size = 12.sp, color = Ember.muted)
         }
+        if (savedCopy && !busy) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                KText("Showing saved schedule", size = 12.sp, color = Ember.muted)
+                FocusButton("Refresh", onClick = onRetry)
+            }
+        }
         if (busy) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 LoadingState()
             }
         } else if (dayEvents.isEmpty() || problem.isNotEmpty()) {
-            Box(Modifier.fillMaxSize().padding(horizontal = 18.dp),
-                contentAlignment = Alignment.TopCenter) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 KText(problem.ifEmpty { "Nothing scheduled for this day." },
-                    color = Ember.muted, modifier = Modifier.padding(top = 20.dp))
+                    color = Ember.muted, align = TextAlign.Center)
+                if (problem.isNotBlank() && problem != "Select Anime to see release dates.") {
+                    FocusButton("Retry", onClick = onRetry)
+                }
             }
         } else {
             LazyVerticalGrid(columns = GridCells.Adaptive(if (tv) 145.dp else 125.dp),
@@ -714,7 +798,7 @@ class MainActivity : ComponentActivity() {
             KText("Episode ${episode.number}", color = Ember.pink, weight = FontWeight.Bold)
             KText(episode.name, size = 12.sp, maxLines = 2)
             if (watchedOnAniWorld)
-                KText("✓ Watched on AniWorld", size = 11.sp, color = Ember.muted)
+                KText("✓ Watched", size = 11.sp, color = Ember.muted)
         }
     }
 }
@@ -729,7 +813,12 @@ class MainActivity : ComponentActivity() {
     onSaved: () -> Unit,
     onPlay: (Title, Episode) -> Unit,
     onTrailer: (String) -> Unit,
+    onOpenRelated: (Title) -> Unit,
+    playTarget: String,
+    onPlayTarget: (String) -> Unit,
+    onRemoteControl: (String) -> Unit,
     malEntry: MalEntry?,
+    malEntries: List<MalEntry>,
     malSuggestion: Boolean,
     onOpenMal: (Int) -> Unit,
 ) {
@@ -740,6 +829,15 @@ class MainActivity : ComponentActivity() {
     var msg by remember(title.id) { mutableStateOf("") }
     var season by remember(title.id) { mutableIntStateOf(1) }
     var saved by remember(title.id) { mutableStateOf(library.has(title)) }
+    var franchise by remember(title.id) {
+        mutableStateOf<List<Catalog.FranchiseRelease>>(emptyList())
+    }
+    LaunchedEffect(title.id) {
+        if (title.kind == Kind.ANIME)
+            franchise = withTimeoutOrNull(16_000) {
+                runCatching { catalog.franchise(title) }.getOrDefault(emptyList())
+            }.orEmpty()
+    }
     LaunchedEffect(title.id, season) {
         busy = true
         val metadata = async { runCatching { catalog.details(title) }.getOrDefault(title) }
@@ -759,55 +857,156 @@ class MainActivity : ComponentActivity() {
         } else filmTrailer?.await()
         busy = false
     }
+    var moreOpen by remember(title.id) { mutableStateOf(false) }
+    var deviceMenuOpen by remember(title.id) { mutableStateOf(false) }
+    var tvControlsOpen by remember(title.id) { mutableStateOf(false) }
+    var synopsisOpen by remember(title.id) { mutableStateOf(false) }
+    val unfinished = library.recent().firstOrNull { row ->
+        row.title.kind == title.kind && row.title.id == title.id &&
+            row.positionMs > 0L && (row.durationMs == 0L ||
+                row.positionMs < row.durationMs - 30_000L)
+    }
+    val nextEpisode = if (title.kind == Kind.MOVIE) Episode(1, full.name) else
+        episodes.firstOrNull { it.number == unfinished?.episode &&
+            (title.kind == Kind.ANIME || it.season == unfinished?.season) }
+            ?: episodes.firstOrNull()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
         .padding(horizontal = if (tv) 26.dp else 15.dp, vertical = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(17.dp)
     ) {
         FocusButton("‹ Back", modifier = Modifier.align(Alignment.Start), onClick = onClose)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(21.dp)) {
-            Artwork(full.poster,
-                Modifier.width(if (tv) 170.dp else 116.dp)
-                    .aspectRatio(.70f).clip(round))
-            Column(Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                KText(full.name, size = if (tv) 29.sp else 22.sp, weight = FontWeight.Bold)
-                KText(listOfNotNull(full.year?.toString(),
-                    if (full.kind == Kind.ANIME) "Anime" else full.kind.label)
-                    .joinToString("  ·  "), color = Ember.muted, size = 12.sp)
-                if (full.description.isNotBlank()) {
-                    KText(full.description, size = 13.sp, color = Color(0xFFE1D4DD),
-                        maxLines = if (tv) 5 else 4)
+        Box(Modifier.fillMaxWidth().height(if (tv) 260.dp else 192.dp)
+            .clip(round).background(Ember.panel)) {
+            Artwork(full.backdrop.ifBlank { full.poster }, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
+                Ember.bg.copy(alpha = .06f), Ember.bg.copy(alpha = .83f)))))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            KText(full.name, size = if (tv) 30.sp else 23.sp,
+                weight = FontWeight.Bold)
+            KText(listOfNotNull(
+                full.year?.toString(),
+                if (full.kind == Kind.ANIME) "Anime" else full.kind.label,
+                full.episodeCount?.let { "$it episodes" }
+            ).joinToString("  ·  "), color = Ember.muted, size = 12.sp)
+            if (full.description.isNotBlank()) {
+                KText(full.description, size = 13.sp, color = Color(0xFFE1D4DD),
+                    maxLines = if (synopsisOpen) Int.MAX_VALUE else 3)
+                if (full.description.length > 190) {
+                    KText(if (synopsisOpen) "Show less" else "Read more",
+                        modifier = Modifier.clickable { synopsisOpen = !synopsisOpen }
+                            .padding(vertical = 6.dp),
+                        size = 12.sp, color = Ember.pink,
+                        weight = FontWeight.SemiBold)
                 }
-                if (malEntry != null) {
-                    KText(malEntry.status + " · " + malEntry.watched + " / " +
+            }
+            if (malEntry != null) {
+                Row(Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    KText(malEntry.displayStatus + "  ·  " + malEntry.watched + "/" +
                         (malEntry.episodes.takeIf { it > 0 }?.toString() ?: "?") +
-                        " watched" + if (malEntry.score > 0) " · Rated " +
+                        " episodes" + if (malEntry.score > 0) "  ·  " +
                         malEntry.score + "/10" else "",
-                        size = 12.sp, color = Ember.pink)
-                    if (malEntry.aniworld.isNotEmpty())
-                        KText("AniWorld watched · " +
-                            malEntry.aniworld.joinToString(" · ") { it.label() },
-                            size = 12.sp, color = Ember.muted)
-                    FocusButton("Rate or edit on MAL", onClick = {
-                        onOpenMal(malEntry.malId)
-                    })
-                } else if (malSuggestion) {
-                    KText("Recommended for you", size = 12.sp, color = Ember.pink)
+                        size = 12.sp, color = Ember.muted,
+                        modifier = Modifier.weight(1f))
+                    FocusButton(if (malEntry.score > 0) "Edit rating" else "Rate",
+                        onClick = { onOpenMal(malEntry.malId) })
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    FocusButton(if (saved) "✓ Saved locally" else "+ Save locally",
-                        active = saved, onClick = {
-                            library.toggle(title)
-                            saved = library.has(title)
-                            onSaved()
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            if (!busy && nextEpisode != null) {
+                FocusButton(if (unfinished != null) "▶ Resume" else "▶ Watch",
+                    primary = true, modifier = Modifier.weight(1f)) {
+                    onPlay(full, nextEpisode)
+                }
+            }
+            FocusButton(if (saved) "✓ My List" else "+ My List",
+                active = saved, onClick = {
+                    library.toggle(title)
+                    saved = library.has(title)
+                    onSaved()
+                })
+            if (trailerId != null)
+                FocusButton("⋯", onClick = { moreOpen = !moreOpen })
+        }
+        if (moreOpen) {
+            Row(Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                trailerId?.let { trailer ->
+                    FocusButton("Trailer", onClick = { onTrailer(trailer) })
+                }
+            }
+        }
+        if (!tv) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    FocusButton(if (playTarget == "xgimi") "XGIMI ▾" else "This phone ▾",
+                        onClick = { deviceMenuOpen = !deviceMenuOpen })
+                    if (playTarget == "xgimi") {
+                        FocusButton("TV controls", onClick = {
+                            tvControlsOpen = !tvControlsOpen
                         })
-                    if (title.kind == Kind.MOVIE) {
-                        FocusButton("▶ Play movie", primary = true,
-                            onClick = { onPlay(full, Episode(1, full.name)) })
                     }
-                    trailerId?.let { trailer ->
-                        FocusButton("▶ Trailer", onClick = { onTrailer(trailer) })
+                }
+                if (deviceMenuOpen) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FocusButton("This phone", active = playTarget == "phone",
+                            onClick = { onPlayTarget("phone"); deviceMenuOpen = false })
+                        FocusButton("XGIMI", active = playTarget == "xgimi",
+                            onClick = { onPlayTarget("xgimi"); deviceMenuOpen = false })
+                    }
+                }
+                if (playTarget == "xgimi" && tvControlsOpen) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FocusButton("−10s", onClick = { onRemoteControl("-10") })
+                        FocusButton("Play / Pause", onClick = { onRemoteControl("toggle") })
+                        FocusButton("+10s", onClick = { onRemoteControl("+10") })
+                    }
+                }
+            }
+        }
+        if (franchise.size > 1) {
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                KText("Seasons & movies", size = 20.sp, weight = FontWeight.Bold)
+                KText("Release order", size = 12.sp, color = Ember.muted)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+                    items(franchise, key = { it.title.id }) { release ->
+                        Column(Modifier.width(if (tv) 143.dp else 123.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Poster(release.title, tv, Modifier.fillMaxWidth()) {
+                                if (release.title.id != title.id) onOpenRelated(release.title)
+                            }
+                            val releaseType = when (release.format) {
+                                "MOVIE" -> "Movie"
+                                "OVA" -> "OVA"
+                                "ONA" -> "ONA"
+                                "SPECIAL" -> "Special"
+                                else -> "Season"
+                            }
+                            val releaseStatus = when (release.status) {
+                                "NOT_YET_RELEASED" -> "Announced"
+                                "RELEASING" -> "Airing"
+                                "FINISHED" -> "Released"
+                                else -> "Date TBA"
+                            }
+                            KText("$releaseType · $releaseStatus", size = 11.sp,
+                                color = Ember.pink, maxLines = 2)
+                            val listed = malEntries.firstOrNull {
+                                release.malId != null && it.malId == release.malId
+                            }
+                            if (listed != null) {
+                                KText(listed.status, size = 11.sp, color = Ember.muted)
+                            } else if (release.malId != null &&
+                                release.title.id != title.id) {
+                                FocusButton("Plan on MAL",
+                                    onClick = { onOpenMal(release.malId) })
+                            }
+                        }
                     }
                 }
             }
@@ -947,6 +1146,9 @@ class MainActivity : ComponentActivity() {
     host: Activity,
     tv: Boolean,
     externalLibraryRevision: Int,
+    resumeRequest: Int,
+    directPlayRequestVersion: Int,
+    directPlayRequest: NativeEpisodeRequest?,
     onExport: () -> Unit,
     onImport: () -> Unit,
 ) {
@@ -958,12 +1160,13 @@ class MainActivity : ComponentActivity() {
     var mal by remember { mutableStateOf(malData.cached()) }
     var malSyncing by remember { mutableStateOf(false) }
     var malError by remember { mutableStateOf("") }
-    var malFilter by remember { mutableStateOf("Watching") }
+    var malFilter by remember { mutableStateOf("All") }
     val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf("Home") }
     var search by remember { mutableStateOf("") }
     var kinds by remember { mutableStateOf(Kind.entries.toSet()) }
     var selected by remember { mutableStateOf<Title?>(null) }
+    var quickTitle by remember { mutableStateOf<Title?>(null) }
     var items by remember { mutableStateOf<List<Title>>(emptyList()) }
     var shelves by remember { mutableStateOf<Map<Kind, List<Title>>>(emptyMap()) }
     var featured by remember { mutableStateOf<Title?>(null) }
@@ -972,10 +1175,34 @@ class MainActivity : ComponentActivity() {
     var calendarDay by remember { mutableStateOf(LocalDate.now(localZone)) }
     var calendarLoading by remember { mutableStateOf(false) }
     var upcoming by remember { mutableStateOf<List<Upcoming>>(emptyList()) }
+    var calendarSavedCopy by remember { mutableStateOf(false) }
+    var calendarRetry by remember { mutableIntStateOf(0) }
+    var forceCalendarRefresh by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var libraryRevision by remember { mutableIntStateOf(0) }
     var resolving by remember { mutableStateOf(false) }
+    val playbackPrefs = remember { host.getSharedPreferences("kunai-devices", 0) }
+    var playTarget by remember {
+        mutableStateOf(if (!tv && playbackPrefs.getString("play-target", "phone") == "xgimi")
+            "xgimi" else "phone")
+    }
+    fun setPlayTarget(value: String) {
+        if (value != "phone" && value != "xgimi") return
+        playTarget = value
+        playbackPrefs.edit().putString("play-target", value).apply()
+    }
+    fun remoteControl(command: String) {
+        if (resolving || tv) return
+        resolving = true
+        error = ""
+        scope.launch {
+            try {
+                val reply = XgimiBridge.control(host, command)
+                if (!reply.ok) error = reply.message
+            } finally { resolving = false }
+        }
+    }
 
     // Direct-to-MAL refresh. All navigation and offline playback use the cached
     // snapshot if MyAnimeList is unreachable. No other device is required.
@@ -995,15 +1222,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    BackHandler(enabled = selected != null || page != "Home" || search.isNotEmpty()) {
+    BackHandler(enabled = quickTitle != null || selected != null ||
+        page != "Home" || search.isNotEmpty()) {
         when {
+            quickTitle != null -> quickTitle = null
             selected != null -> selected = null
             search.isNotEmpty() -> search = ""
             else -> page = "Home"
         }
     }
 
-    LaunchedEffect(page, search, kinds, calendarWeek) {
+    LaunchedEffect(page, search, kinds, calendarWeek, calendarDay, calendarRetry) {
+        val refreshRequested = forceCalendarRefresh
+        forceCalendarRefresh = false
         if (selected != null) return@LaunchedEffect
         if (search.length == 1) {
             items = emptyList()
@@ -1072,12 +1303,19 @@ class MainActivity : ComponentActivity() {
                 "Calendar" -> {
                     calendarLoading = true
                     try {
-                        val range = CalendarWeek.range(calendarWeek, localZone)
-                        upcoming = if (Kind.ANIME in kinds) {
-                            withTimeoutOrNull(12_000) {
-                                catalog.calendar(range.first, range.last + 1)
+                        // Fetch only the selected day. A weekly first page drops
+                        // late-week shows, and wastes AniList's request quota.
+                        val day = CalendarWeek.dayRange(calendarDay, localZone)
+                        if (Kind.ANIME in kinds) {
+                            val feed = withTimeoutOrNull(18_000) {
+                                catalog.calendar(day.first, day.last + 1, refreshRequested)
                             } ?: throw IllegalStateException("Calendar request timed out")
-                        } else emptyList()
+                            upcoming = feed.entries
+                            calendarSavedCopy = feed.savedCopy
+                        } else {
+                            upcoming = emptyList()
+                            calendarSavedCopy = false
+                        }
                     } finally {
                         calendarLoading = false
                     }
@@ -1140,10 +1378,17 @@ class MainActivity : ComponentActivity() {
         error = ""
         scope.launch {
             try {
-                val stream = if (title.kind == Kind.ANIME) kaa.resolve(title, episode.number)
-                    else movy.resolve(title, episode.season, episode.number)
-                if (stream != null) PlayerActivity.launch(host, title, episode.number, episode.season, stream)
-                else error = "No verified playable stream for this title. Nothing else was opened."
+                if (!tv && playTarget == "xgimi") {
+                    val reply = XgimiBridge.play(host, title, episode)
+                    if (!reply.ok) error = reply.message
+                    else Toast.makeText(host, reply.message, Toast.LENGTH_SHORT).show()
+                } else {
+                    val stream = if (title.kind == Kind.ANIME) kaa.resolve(title, episode.number)
+                        else movy.resolve(title, episode.season, episode.number)
+                    if (stream != null) PlayerActivity.launch(host, title,
+                        episode.number, episode.season, stream)
+                    else error = "No verified playable stream for this title. Nothing else was opened."
+                }
             } catch (e: Exception) {
                 error = "This episode could not be played. ${safeMessage(e)}"
             } finally {
@@ -1152,12 +1397,75 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    LaunchedEffect(directPlayRequestVersion) {
+        val request = directPlayRequest ?: return@LaunchedEffect
+        if (directPlayRequestVersion <= 0) return@LaunchedEffect
+        // Prefer an existing exact title, preserving its native AniList/TMDB id
+        // and all per-episode checkpoints. Phone's legacy anime id is a KAA slug.
+        val key = nativeTitleKey(request.title)
+        val local = library.recent().firstOrNull {
+            it.title.kind == request.kind && nativeTitleKey(it.title.name) == key &&
+                (it.title.id == request.id || it.title.sourceSlug == request.id)
+        }?.title
+        val choice = local ?: if (request.id.all(Char::isDigit)) {
+            Title(request.id, request.kind, request.title, request.year)
+        } else if (request.kind == Kind.ANIME) {
+            val matches = catalog.search(request.title, setOf(Kind.ANIME))
+                .filter { nativeTitleKey(it.name) == key }
+                .distinctBy { it.id }
+            matches.singleOrNull()?.copy(sourceSlug = request.id)
+        } else null
+        if (choice == null) {
+            error = "Couldn't match this episode to the native Kunai library."
+        } else {
+            // Actual playback runs on the projector, not the Mirai TV stream.
+            play(choice, Episode(request.episode, "Episode ${request.episode}",
+                season = request.season))
+        }
+    }
+
+    LaunchedEffect(resumeRequest) {
+        if (resumeRequest > 0) {
+            val recent = library.recent().firstOrNull { row ->
+                row.positionMs > 0 && (row.durationMs == 0L ||
+                    row.positionMs < row.durationMs - 30_000L)
+            }
+            if (recent != null) {
+                play(recent.title, Episode(recent.episode,
+                    "Episode ${recent.episode}", season = recent.season))
+            }
+        }
+    }
+
+    val savedTitles = remember(libraryRevision, externalLibraryRevision) {
+        library.saved()
+    }
+    val continueTitles = remember(mal, libraryRevision, externalLibraryRevision, kinds) {
+        val completedIds = mal.completed.mapTo(HashSet()) { it.title.id }
+        val completedNames = mal.completed.mapTo(HashSet()) {
+            nativeTitleKey(it.title.name)
+        }
+        val local = library.recent().asSequence()
+            .filter { it.title.kind in kinds && it.positionMs > 0L &&
+                (it.durationMs <= 0L || it.positionMs < it.durationMs - 30_000L) }
+            .map { it.title }
+            .filterNot { it.kind == Kind.ANIME && (it.id in completedIds ||
+                nativeTitleKey(it.name) in completedNames) }
+            .toList()
+        val watching = if (Kind.ANIME in kinds) mal.watching.filter { it.watched > 0 }
+            .map { it.title } else emptyList()
+        (local + watching).distinctBy { it.kind to nativeTitleKey(it.name) }
+    }
+    val activeNav = if (page in setOf("Discover", "Continue", "My List",
+            "Recommendations", "Saved")) "Home" else page
+
+    CompositionLocalProvider(LocalPosterActions provides { title -> quickTitle = title }) {
     Column(Modifier.fillMaxSize().background(Ember.bg)
         .statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.weight(1f)) {
-            if (tv) SideNavigation(page) { nav(it) }
+            if (tv) SideNavigation(activeNav) { nav(it) }
             Column(Modifier.weight(1f)) {
-                if (page != "Settings") Header(search, {
+                if (selected == null && page != "Settings") Header(search, {
                     search = it
                     if (it.isNotBlank()) page = "Discover"
                 }, kinds, { kinds = it }, tv)
@@ -1167,9 +1475,14 @@ class MainActivity : ComponentActivity() {
                         onSaved = { libraryRevision++ },
                         onPlay = ::play,
                         onTrailer = ::trailer,
+                        onOpenRelated = { selected = it },
+                        playTarget = playTarget,
+                        onPlayTarget = ::setPlayTarget,
+                        onRemoteControl = ::remoteControl,
                         malEntry = mal.entries.firstOrNull {
                             it.title.id == selected!!.id && it.title.kind == selected!!.kind
                         },
+                        malEntries = mal.entries,
                         malSuggestion = mal.suggestions.any { it.title.id == selected!!.id },
                         onOpenMal = { openMal(it) })
                 } else {
@@ -1216,16 +1529,13 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                if (Kind.ANIME in kinds && mal.watching.isNotEmpty()) item {
-                                    Shelf("Continue watching", mal.watching.take(20).map { it.title },
+                                if (continueTitles.isNotEmpty()) item {
+                                    Shelf("Continue watching", continueTitles,
                                         tv, { selected = it }, { page = "Continue" })
                                 }
                                 if (Kind.ANIME in kinds && mal.suggestions.isNotEmpty()) item {
                                     Shelf("For you", mal.suggestions.map { it.title },
-                                        tv, { selected = it }, {
-                                            page = "Discover"
-                                            items = mal.suggestions.map { it.title }
-                                        })
+                                        tv, { selected = it }, { page = "Recommendations" })
                                 }
                                 if (Kind.ANIME in kinds && mal.planned.isNotEmpty()) item {
                                     Shelf("Plan to Watch", mal.planned.take(20).map { it.title },
@@ -1233,12 +1543,23 @@ class MainActivity : ComponentActivity() {
                                             page = "My List"; malFilter = "Plan to Watch"
                                         })
                                 }
+                                if (savedTitles.any { it.kind in kinds }) item {
+                                    Shelf("Saved titles", savedTitles.filter { it.kind in kinds },
+                                        tv, { selected = it }, { page = "Saved" })
+                                }
                                 Kind.entries.filter { it in kinds }.forEach { kind ->
                                     val rows = shelves[kind].orEmpty()
                                     if (rows.isNotEmpty()) item {
                                         Shelf(kind.label, rows, tv, { selected = it }) {
                                             page = "Discover"; items = rows
                                         }
+                                    }
+                                }
+                                item {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        FocusButton("Browse all", onClick = { page = "Discover" })
+                                        FocusButton("My List", onClick = { page = "My List" })
+                                        FocusButton("Saved", onClick = { page = "Saved" })
                                     }
                                 }
                                 if (error.isNotBlank()) item { KText(error, color = Ember.muted) }
@@ -1251,8 +1572,19 @@ class MainActivity : ComponentActivity() {
                                     if (Kind.ANIME !in kinds) "Select Anime to see release dates."
                                     else ""
                                 },
-                                tv, ::changeCalendarWeek,
+                                calendarSavedCopy,
+                                tv, {
+                                    forceCalendarRefresh = true
+                                    calendarRetry++
+                                }, ::changeCalendarWeek,
                                 { calendarDay = it }, { selected = it })
+                        page == "Recommendations" ->
+                            TitleGrid(mal.suggestions.map { it.title }
+                                .filter { it.kind in kinds }, tv) { selected = it }
+                        page == "Saved" ->
+                            TitleGrid(savedTitles.filter { it.kind in kinds }, tv) {
+                                selected = it
+                            }
                         page == "My List" ->
                             if (mal.entries.isNotEmpty() && Kind.ANIME in kinds) {
                                 MalGridPage(mal, tv, malFilter, { malFilter = it },
@@ -1263,22 +1595,16 @@ class MainActivity : ComponentActivity() {
                                 }.filter { it.kind in kinds }, tv) { selected = it }
                             }
                         page == "Continue" ->
-                            if (mal.watching.isNotEmpty() && Kind.ANIME in kinds) {
-                                MalGridPage(mal, tv, "Watching", {}, { selected = it },
-                                    showFilters = false,
-                                    recentIds = library.recent().map { it.title.id }.toSet())
-                            } else {
-                                TitleGrid(remember(libraryRevision, externalLibraryRevision) {
-                                    library.recent().map { it.title }
-                                        .distinctBy { entry -> entry.kind to entry.id }
-                                }.filter { it.kind in kinds }, tv) { selected = it }
-                            }
+                            TitleGrid(continueTitles, tv) { selected = it }
                     }
                 }
             }
         }
-        if (!tv) BottomNavigation(page) { nav(it) }
-        if (error.isNotBlank() || resolving) {
+        if (!tv && selected == null) BottomNavigation(activeNav) { nav(it) }
+        // Calendar and Home already show request failures in their own content.
+        // Keep the bottom bar for playback and pages without an inline error.
+        if (resolving || (error.isNotBlank() &&
+                (selected != null || page !in setOf("Calendar", "Home")))) {
             Row(Modifier.fillMaxWidth().background(Ember.panel).padding(12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -1286,6 +1612,41 @@ class MainActivity : ComponentActivity() {
                 KText(if (resolving) "Resolving an episode on this device…" else error,
                     modifier = Modifier.weight(1f), color = Ember.text, maxLines = 2)
                 if (!resolving) FocusButton("Close", onClick = { error = "" })
+            }
+        }
+    }
+    }
+    quickTitle?.let { title ->
+        val owned = mal.entries.firstOrNull {
+            it.title.id == title.id && it.title.kind == title.kind
+        }
+        val malId = owned?.malId ?: mal.suggestions.firstOrNull {
+            it.title.id == title.id && title.kind == Kind.ANIME
+        }?.malId
+        Dialog(onDismissRequest = { quickTitle = null }) {
+            Column(Modifier.fillMaxWidth().widthIn(max = 390.dp)
+                .clip(RoundedCornerShape(18.dp)).background(Ember.panel)
+                .border(1.dp, Ember.border, RoundedCornerShape(18.dp))
+                .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                KText(title.name, size = 17.sp, weight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 5.dp), maxLines = 2)
+                FocusButton("Details", modifier = Modifier.fillMaxWidth(),
+                    onClick = { quickTitle = null; selected = title })
+                FocusButton(if (library.has(title)) "Remove from My List"
+                    else "Save to My List", modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        library.toggle(title)
+                        libraryRevision++
+                        quickTitle = null
+                    })
+                if (malId != null && malId > 0) {
+                    FocusButton(if (owned == null) "Plan on MAL" else "Rate or edit on MAL",
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { quickTitle = null; openMal(malId) })
+                }
+                FocusButton("Cancel", modifier = Modifier.fillMaxWidth(),
+                    onClick = { quickTitle = null })
             }
         }
     }

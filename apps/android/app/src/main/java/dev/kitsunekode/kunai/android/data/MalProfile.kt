@@ -48,7 +48,11 @@ data class MalEntry(
     val subscribed: Boolean,
     val watchlist: Boolean,
     val aniworld: List<WatchedSeason> = emptyList(),
-)
+) {
+    val isComplete: Boolean get() = status == "Completed" ||
+        (episodes > 0 && watched >= episodes)
+    val displayStatus: String get() = if (isComplete) "Completed" else status
+}
 
 data class MalSuggestion(val title: Title, val reason: String, val malId: Int)
 data class MalSnapshot(
@@ -57,10 +61,13 @@ data class MalSnapshot(
     val suggestions: List<MalSuggestion>,
     val syncedAt: String,
 ) {
-    val watching get() = entries.filter { it.status == "Watching" }
+    // An older MAL snapshot can still say Watching even after its final
+    // published episode was recorded. Treat only known positive totals as
+    // complete; unknown or airing episode totals must not be guessed.
+    val watching get() = entries.filter { it.status == "Watching" && !it.isComplete }
         .sortedWith(compareByDescending<MalEntry> { it.updatedAt }.thenBy { it.title.name })
     val planned get() = entries.filter { it.status == "Plan to Watch" }.sortedBy { it.title.name }
-    val completed get() = entries.filter { it.status == "Completed" }.sortedBy { it.title.name }
+    val completed get() = entries.filter { it.isComplete }.sortedBy { it.title.name }
     val subscribed get() = entries.filter { it.subscribed }.sortedBy { it.title.name }
     val watchlist get() = entries.filter { it.watchlist }.sortedBy { it.title.name }
     companion object { val EMPTY = MalSnapshot("", emptyList(), emptyList(), "") }
@@ -127,7 +134,7 @@ class MalProfile(context: Context) {
             for (i in 0 until rows.length()) {
                 val row = rows.optJSONObject(i) ?: continue
                 val malId = row.optInt("malId").takeIf { it > 0 } ?: continue
-                val name = row.optString("title").takeIf { it.isNotBlank() } ?: continue
+                val name = CatalogIdentity.readable(row.optString("title")) ?: continue
                 val episodes = row.optInt("episodes").coerceAtLeast(0)
                 add(MalEntry(
                     malId,
@@ -170,7 +177,7 @@ class MalProfile(context: Context) {
                 if (row.optInt("malId") in owned) continue
                 val id = row.optString("id").takeIf { it.matches(Regex("[0-9]{1,10}")) }
                     ?: continue
-                val name = row.optString("title").takeIf { it.isNotBlank() } ?: continue
+                val name = CatalogIdentity.readable(row.optString("title")) ?: continue
                 add(MalSuggestion(
                     Title(id, Kind.ANIME, name,
                         year = row.optInt("year").takeIf { it in 1900..2200 },
@@ -217,9 +224,10 @@ class MalProfile(context: Context) {
                 4 -> "Dropped"; 6 -> "Plan to Watch"
                 else -> error("Unexpected MAL status")
             }
-            val name = old?.title?.name
-                ?: row.optString("anime_title_eng").ifBlank { row.optString("anime_title") }
-            require(name.isNotBlank())
+            val name = old?.title?.name?.let(CatalogIdentity::readable)
+                ?: CatalogIdentity.readable(row.optString("anime_title_eng"))
+                ?: CatalogIdentity.readable(row.optString("anime_title"))
+                ?: error("MAL entry has no title")
             val poster = old?.title?.poster?.takeIf { it.isNotBlank() }
                 ?: row.optString("anime_image_path").takeIf {
                     it.startsWith("https://cdn.myanimelist.net/")
