@@ -1,6 +1,7 @@
 package dev.kitsunekode.kunai.android.data
 
 import android.net.Uri
+import androidx.media3.common.MimeTypes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -14,6 +15,28 @@ import java.util.concurrent.ConcurrentHashMap
  * existing JSON + Astro contracts. Executes on the Android device itself.
  * Only exact title/year matches are accepted. No shared backend or JS runtime.
  */
+/**
+ * Repair the specific malformed HTTPS schemes emitted by the current Astro
+ * subtitle source. Never downgrade to HTTP or relax public-host validation.
+ */
+internal fun normalizeProviderScheme(raw: String): String = when {
+    raw.startsWith("https:////") -> "https://" + raw.removePrefix("https:////")
+    raw.startsWith("https:///") -> "https://" + raw.removePrefix("https:///")
+    raw.startsWith("//") -> "https:" + raw
+    else -> raw
+}
+
+/** Verify subtitle format from file bytes. A .srt filename can contain WEBVTT. */
+internal fun subtitleMimeFromHeader(prefix: ByteArray): String? {
+    val first = prefix.toString(Charsets.UTF_8).removePrefix("\uFEFF").trimStart()
+    return when {
+        first.startsWith("WEBVTT") -> MimeTypes.TEXT_VTT
+        Regex("""^\d+\s*\r?\n\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->""")
+            .containsMatchIn(first) -> MimeTypes.APPLICATION_SUBRIP
+        else -> null
+    }
+}
+
 class Kaa {
     private val base = "https://kaa.lt"
     private val cached = ConcurrentHashMap<String, String>()
@@ -113,7 +136,16 @@ class Kaa {
                 Network.text(parsed.first, headers = streamHeaders, limit = 230_000)
             }.getOrNull()
             if (!master.orEmpty().startsWith("#EXTM3U")) continue
-            return@withContext Stream(parsed.first, streamHeaders, parsed.second, server.name)
+            val captions = parsed.second.map { sub ->
+                // A short HTTPS range probe prevents silent missing captions
+                // when the source mislabels WebVTT as .srt (verified on KAA).
+                // Fail open to the URL extension if this probe is unavailable.
+                val mime = runCatching {
+                    subtitleMimeFromHeader(Network.prefix(sub.uri, streamHeaders))
+                }.getOrNull()
+                sub.copy(mimeType = mime)
+            }
+            return@withContext Stream(parsed.first, streamHeaders, captions, server.name)
         }
         null
     }
@@ -159,14 +191,8 @@ class Kaa {
             !host.matches(Regex("(172\\.(1[6-9]|2[0-9]|3[01]))\\..*"))
     }
 
-    private fun normalizeVideoUrl(raw: String): String {
-        val value = when {
-            raw.startsWith("//") -> "https:$raw"
-            raw.startsWith("https:////") -> "https://" + raw.removePrefix("https:////")
-            else -> raw
-        }
-        return value.takeIf(::safeVideoUrl).orEmpty()
-    }
+    private fun normalizeVideoUrl(raw: String): String =
+        normalizeProviderScheme(raw).takeIf(::safeVideoUrl).orEmpty()
 
     /**
      * Astro props are tagged tuples: [0,value] and [1,[items]].

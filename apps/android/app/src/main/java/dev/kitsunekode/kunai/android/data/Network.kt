@@ -67,6 +67,49 @@ internal object Network {
             connection.disconnect()
         }
     }
+    /** Read a bounded prefix to identify subtitle content instead of trusting
+     * extensions or content-type labels from provider CDN responses.
+     * Provider resolution calls this off the Android main thread.
+     */
+    fun prefix(url: String, headers: Map<String, String>, length: Int = 128): ByteArray {
+        require(length in 16..512)
+        val uri = Uri.parse(url)
+        require(uri.scheme == "https" && !uri.host.isNullOrBlank() &&
+            uri.userInfo == null && (uri.port == -1 || uri.port == 443) &&
+            isPublicHost(uri.host.orEmpty())) { "Only public HTTPS is supported" }
+        val connection = URL(url).openConnection() as HttpsURLConnection
+        try {
+            connection.connectTimeout = 4500
+            connection.readTimeout = 4500
+            connection.instanceFollowRedirects = true
+            connection.setRequestProperty("Range", "bytes=0-${length - 1}")
+            connection.setRequestProperty("User-Agent", AGENT)
+            headers.forEach { (key, value) ->
+                if (key.lowercase() in setOf("referer", "origin", "user-agent") &&
+                    value.length <= 350 && !value.contains("\r") && !value.contains("\n")) {
+                    connection.setRequestProperty(key, value)
+                }
+            }
+            check(connection.responseCode in 200..299) { "Subtitle unavailable" }
+            val destination = connection.url.toURI()
+            check(destination.scheme == "https" && destination.host != null &&
+                (destination.port == -1 || destination.port == 443) &&
+                isPublicHost(destination.host)) { "Unsafe subtitle redirect" }
+            return connection.inputStream.use { input ->
+                val bytes = ByteArray(length)
+                var total = 0
+                while (total < length) {
+                    val count = input.read(bytes, total, length - total)
+                    if (count < 0) break
+                    total += count
+                }
+                bytes.copyOf(total)
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun isPublicHost(name: String): Boolean {
         val host = name.lowercase().trim('[', ']')
         if (host in setOf("localhost", "::1", "0.0.0.0") ||

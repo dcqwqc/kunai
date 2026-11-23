@@ -24,7 +24,12 @@ data class Episode(
     val season: Int = 1,
     val still: String = "",
 )
-data class Subtitle(val uri: String, val language: String, val label: String)
+data class Subtitle(
+    val uri: String, val language: String, val label: String,
+    // Explicit format discovered from content. Some providers serve WEBVTT
+    // files with misleading .srt names, which Media3 cannot decode as SubRip.
+    val mimeType: String? = null,
+)
 data class Stream(
     val url: String,
     val headers: Map<String, String> = emptyMap(),

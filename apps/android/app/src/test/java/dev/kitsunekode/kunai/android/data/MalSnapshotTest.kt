@@ -48,6 +48,21 @@ class MalSnapshotTest {
         assertEquals("E1–3, E5", compactEpisodes(listOf(1, 2, 3, 5, 5)))
     }
 
+    @Test fun fullyWatchedWatchingIsCompletedWithoutHidingUnknownTotals() {
+        val completedByCount = entry(11, "Watching", watched = 12)
+        val incomplete = entry(12, "Watching", watched = 11)
+        val unknownTotal = entry(13, "Watching", watched = 12).copy(episodes = 0)
+        val explicitlyCompleted = entry(14, "Completed", watched = 8)
+        val profile = MalSnapshot("account", listOf(completedByCount,
+            incomplete, unknownTotal, explicitlyCompleted), emptyList(), "")
+        assertEquals(listOf(12, 13), profile.watching.map { it.malId })
+        assertEquals(listOf(11, 14), profile.completed.map { it.malId })
+        assertTrue(completedByCount.isComplete)
+        assertEquals("Completed", completedByCount.displayStatus)
+        assertFalse(unknownTotal.isComplete)
+        assertEquals("Watching", unknownTotal.displayStatus)
+    }
+
     @Test fun continuePrefersMoreRecentlyUpdatedEntries() {
         val profile = MalSnapshot("account", listOf(
             entry(1, "Watching", updated = 1), entry(2, "Watching", updated = 50),

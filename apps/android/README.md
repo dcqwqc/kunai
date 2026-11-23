@@ -44,7 +44,12 @@ From this directory:
 Uses Gradle 9.6.1, AGP 9.1, Kotlin/Compose, Android SDK 37, JDK 17.
 The APK is `app/build/outputs/apk/debug/app-debug.apk` and application ID
 `dev.kitsunekode.kunai`. Debug APKs are for local device QA only, not a
-signed public release.
+signed public release. On devices with an existing debug installation,
+Android only accepts an in-place update signed by its original certificate.
+Kunai prefers the existing XDG Android debug keystore when available, or
+accepts `-PkunaiDebugKeystore=/absolute/path/to/debug.keystore` to select
+an authorized original key. Check certificate fingerprints before upgrading;
+**never uninstall an existing Kunai just to bypass a signing mismatch**.
 
 ## Device QA (November 22, 2026)
 
@@ -168,10 +173,12 @@ in place without clearing the local library.
 The MAL library keeps status, ratings and progress independent from
 individual AniWorld watched events. Each MAL entry also carries the verified
 AniWorld season-and-episode bitmap in the owner's private offline bootstrap.
-Details show the exact watched episode ranges (including gaps), and episode
-cards mark only observed episodes. A MAL title with ambiguous mappings never
-marks another season's episodes. These bitmaps remain in the on-device cache
-after a direct public MAL status/score refresh.
+The exact bitmap is retained for provenance and playback progress, but the
+visible detail screen no longer dumps raw AniWorld season/episode ranges.
+Episode cards show a short Watched marker only for observed episodes.
+A MAL title with ambiguous mappings never marks another season's episodes.
+These bitmaps remain in the on-device cache after a direct public MAL
+status/score refresh.
 
 MAL represents only a contiguous numeric watched counter, not a per-episode
 bitmap. The companion authenticated, local-only sync on Tachibana updates
@@ -179,3 +186,91 @@ counters from verified contiguous AniWorld history, without changing list
 category, rating or notes. Standalone Android needs no Tachibana server for
 playback or reading its existing offline bitmap, but the source bitmap updates
 only when a refreshed private bootstrap is installed or independently synced.
+
+
+## Unified Home (November 23, 2026)
+
+The native phone and TV app now has three primary destinations: **Home**,
+**Calendar** and **Settings**. Home includes Continue watching (unfinished
+local playback plus started MAL titles, excluding completed entries),
+recommendations with their own full collection, Plan to Watch, saved titles,
+and the anime/series/movie catalog rows. Home footer actions open full
+Discover, My List and Saved collections without introducing additional
+permanent tabs. Search stays accessible at the top. Long-pressing a poster opens a compact
+native menu for Details, Save/Remove from My List, and MAL editing (when a
+verified MAL identity exists); the underlying list updates immediately.
+
+Known completed episode totals count as Completed even when an older offline
+MAL snapshot still says Watching; unknown totals are never guessed. The
+owner-only gitignored bootstrap now includes the authenticated completion
+updates. The Calendar's redundant This week button is removed.
+
+The related franchise shelf uses AniList's real release graph, with visible
+announced/airing/released statuses. Each verified MAL-linked follow-up has a
+**Plan on MAL** action. Rating/edit controls are directly visible in title
+details. The authenticated desktop/TV gateway can write status and ratings;
+the standalone Android app still uses the official MAL web editor until a
+native OAuth write flow exists. An external editor opening is never counted
+as a successful update.
+
+A private Android emulator installed and opened the new APK, and the full
+Recommendations and Continue grids were inspected using real screenshots.
+The emulator had no network connectivity, so poster loading and live source
+playback were not verified there. The Nothing Phone's active Moonlight/Untis
+sessions were left untouched during this deployment.
+
+## Kunai collection and projector playback (November 23, 2026)
+
+Anime detail screens now load a bounded AniList relation graph. Related
+seasons, specials, OVAs and films appear in a horizontal
+**Seasons & movies** collection sorted by metadata release date.
+This is **release order**, not an invented in-universe chronology;
+separate titles retain their provider identity, episode and progress.
+The collection loads on opening a title rather than blocking the home
+catalog. Search grids hide literal `null` labels and collapse duplicate
+listings of the same type/name/release year.
+
+On Android 14+ phones, **Play on → XGIMI** uses an explicit authenticated
+companion-app handoff to the existing paired XGIMI Remote service.
+The native Kunai detail view also exposes Play/Pause, ±10s and Back.
+The phone-default **This phone** continues using on-device Media3 without
+a remote app or home server. Casting requires the separately installed,
+paired XGIMI Remote app and the existing TV bridge; no stream URLs or
+credentials cross the inter-app boundary.
+
+Android debug builds and unit tests passed locally. The owner-signed 0.1.14
+APK upgraded Mirai and Tachibana Waydroid, Nothing Phone 2, and XGIMI MoGo 2
+Pro without an uninstall or loss of saved app data. Each installed package's
+SHA-256 was verified against the signed APK. The active phone screen and
+projector screensaver were left undisturbed. Long-press quick actions passed
+UI acceptance on an isolated Android emulator. The emulator lacked network
+access, so network-backed image loading and projected video/audio playback
+are not claimed as verified. Echo Show was unavailable in recovery mode.
+
+## Native title hierarchy and linked releases (November 23, 2026)
+
+Native Kunai uses the existing Ember Dusk colors, artwork and focus states. A
+series page presents an artwork hero, title and concise metadata, one primary
+Watch/Resume action, My List, and secondary trailer/rating actions. The device
+selector stays collapsed until needed; projector seek controls are only shown
+when XGIMI is the selected target and the user opens TV controls.
+
+For anime, a bounded AniList relation traversal connects confirmed prequels,
+sequels and related releases. An additional narrowly matched AniList search
+fills missing franchise movies (verified against the *That Time I Got
+Reincarnated as a Slime* releases from 2018 onward). Releases keep their own
+AniList IDs, playback sources and saved episode positions. Related titles are
+presented by **release date**, not claimed to be the fictional story chronology.
+Unknown `null`/`Untitled` catalog names are hidden instead of shown as cards;
+repeated release cards are deduplicated within native shelves and grids.
+
+Phone Kunai can select XGIMI for playback, using the existing separately
+paired XGIMI Remote service as a credentials-owning transport. XGIMI Remote
+no longer provides a duplicate Kunai browse tab. Casting is optional and
+requires both phone apps installed on Android 14+, plus an available TV bridge.
+
+Native Gradle debug tests and the debug build passed on November 23. Remote
+unit checks, signed-debug APK build, and shared GUI asset checks also passed.
+The projector's physical video/audio and the new phone UI have not yet been
+visually re-tested after installation; the owner's phone was actively using
+Moonlight, so this build was only staged and not installed over an active session.

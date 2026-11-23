@@ -23,14 +23,17 @@ class Library(context: Context) {
         prefs.edit().putString("list", arr.toString()).apply()
     }
 
-    fun record(title: Title, season: Int, episode: Int, positionMs: Long, durationMs: Long) {
+    fun record(title: Title, season: Int, episode: Int, positionMs: Long, durationMs: Long,
+               durable: Boolean = false) {
         val rows = recent().filterNot {
             it.title.id == title.id && it.title.kind == title.kind &&
                 it.season == season && it.episode == episode
         }.toMutableList()
         rows.add(0, Recent(title, season.coerceAtLeast(1), episode.coerceAtLeast(1),
             positionMs.coerceAtLeast(0), durationMs.coerceAtLeast(0), System.currentTimeMillis()))
-        prefs.edit().putString("recent", historyJson(rows.take(120)).toString()).apply()
+        val edit = prefs.edit().putString("recent", historyJson(rows.take(120)).toString())
+        if (durable) check(edit.commit()) { "Playback checkpoint could not be saved" }
+        else edit.apply()
     }
 
     fun recent(): List<Recent> = parseHistory(prefs.getString("recent", "[]"))
@@ -117,8 +120,8 @@ class Library(context: Context) {
                 ?: return null
             val kind = Kind.entries.firstOrNull { it.key == value.optString("kind") }
                 ?: return null
-            val name = value.optString("name").takeIf { it.isNotBlank() && it.length <= 200 }
-                ?: return null
+            val name = CatalogIdentity.readable(value.optString("name"))
+                ?.takeIf { it.length <= 200 } ?: return null
             fun photo(key: String): String = value.optString(key).takeIf {
                 it.length <= 600 && (it.isEmpty() ||
                     it.startsWith("https://s4.anilist.co/") ||
