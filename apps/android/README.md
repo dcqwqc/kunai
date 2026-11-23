@@ -187,7 +187,6 @@ category, rating or notes. Standalone Android needs no Tachibana server for
 playback or reading its existing offline bitmap, but the source bitmap updates
 only when a refreshed private bootstrap is installed or independently synced.
 
-
 ## Unified Home (November 23, 2026)
 
 The native phone and TV app now has three primary destinations: **Home**,
@@ -257,8 +256,8 @@ when XGIMI is the selected target and the user opens TV controls.
 
 For anime, a bounded AniList relation traversal connects confirmed prequels,
 sequels and related releases. An additional narrowly matched AniList search
-fills missing franchise movies (verified against the *That Time I Got
-Reincarnated as a Slime* releases from 2018 onward). Releases keep their own
+fills missing franchise movies (verified against the _That Time I Got
+Reincarnated as a Slime_ releases from 2018 onward). Releases keep their own
 AniList IDs, playback sources and saved episode positions. Related titles are
 presented by **release date**, not claimed to be the fictional story chronology.
 Unknown `null`/`Untitled` catalog names are hidden instead of shown as cards;
